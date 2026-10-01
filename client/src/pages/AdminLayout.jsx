@@ -3,33 +3,35 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api, auth } from '../api.js';
 import Avatar from '../components/Avatar.jsx';
 import Icon from '../components/Icons.jsx';
+import { can } from '../permissions.js';
 
 // Menu phụ của khu vực AI Agent (giống Business Agent: Trang chủ / Thông tin / Hướng dẫn / Chat thử / Cài đặt)
 const AGENT_NAV = [
   { to: '/admin', label: 'Trang chủ', icon: 'home', end: true },
-  { to: '/admin/info', label: 'Thông tin của bạn', icon: 'bulb' },
-  { to: '/admin/guidance', label: 'Hướng dẫn', icon: 'guide' },
-  { to: '/admin/playground', label: 'Chat thử', icon: 'flask' },
-  { to: '/admin/settings', label: 'Cài đặt', icon: 'gear' },
+  { to: '/admin/info', label: 'Thông tin của bạn', icon: 'bulb', perm: 'settings.view' },
+  { to: '/admin/guidance', label: 'Hướng dẫn', icon: 'guide', perm: 'settings.view' },
+  { to: '/admin/playground', label: 'Chat thử', icon: 'flask', perm: 'playground.use' },
+  { to: '/admin/settings', label: 'Cài đặt', icon: 'gear', perm: 'settings.view' },
 ];
 const AGENT_PATHS = AGENT_NAV.map((n) => n.to);
 
 // Cột icon ngoài cùng bên trái
 const RAIL = [
   { to: '/admin', label: 'AI Agent', icon: 'sparkle', agent: true },
-  { to: '/admin/inbox', label: 'Hộp thư', icon: 'chat' },
-  { to: '/admin/orders', label: 'Đơn hàng', icon: 'receipt' },
-  { to: '/admin/products', label: 'Sản phẩm', icon: 'box' },
-  { to: '/admin/stats', label: 'Thống kê', icon: 'chart' },
+  { to: '/admin/inbox', label: 'Hộp thư', icon: 'chat', perm: 'inbox.view' },
+  { to: '/admin/orders', label: 'Đơn hàng', icon: 'receipt', perm: 'orders.view' },
+  { to: '/admin/products', label: 'Sản phẩm', icon: 'box', perm: 'products.view' },
+  { to: '/admin/stats', label: 'Thống kê', icon: 'chart', perm: 'stats.view' },
+  { to: '/admin/users', label: 'Người dùng', icon: 'person', perm: 'users.manage' },
 ];
 
-function AiToggle() {
+function AiToggle({ me }) {
   const [enabled, setEnabled] = useState(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api('/admin/settings').then((s) => setEnabled(s.botEnabled)).catch(() => {});
-  }, []);
+    if (can(me, 'settings.view')) api('/admin/settings').then((s) => setEnabled(s.botEnabled)).catch(() => {});
+  }, [me]);
 
   async function toggle() {
     setBusy(true);
@@ -52,7 +54,7 @@ function AiToggle() {
         aria-label="Bật/tắt AI tự động trả lời"
         className={`switch${enabled ? ' on' : ''}`}
         onClick={toggle}
-        disabled={busy}
+        disabled={busy || !can(me, 'settings.manage')}
       >
         <span />
       </button>
@@ -64,13 +66,21 @@ export default function AdminLayout() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const isAgent = AGENT_PATHS.includes(pathname.replace(/\/$/, '') || '/admin');
+  const [me, setMe] = useState(null);
+
+  useEffect(() => {
+    api('/auth/me').then(setMe).catch(() => {});
+  }, []);
+
+  if (!me) return <p className="muted pad">Đang tải...</p>;
+  const allowed = (n) => !n.perm || can(me, n.perm);
 
   return (
     <div className="mba">
       <aside className="rail">
         <div className="rail-brand" title="AI Sales Agent">AI</div>
         <nav className="rail-nav">
-          {RAIL.map((r) => (
+          {RAIL.filter(allowed).map((r) => (
             <NavLink
               key={r.to}
               to={r.to}
@@ -98,7 +108,7 @@ export default function AdminLayout() {
           >
             <Icon name="logout" size={22} />
           </button>
-          <Avatar name="Admin" size={32} />
+          <Avatar name={me.displayName || me.username} size={32} />
         </div>
       </aside>
 
@@ -110,11 +120,11 @@ export default function AdminLayout() {
                 <h1>AI Business Agent</h1>
                 <p>Quản lý những gì AI biết và cách AI hành động thay mặt doanh nghiệp bạn.</p>
               </div>
-              <AiToggle />
+              <AiToggle me={me} />
             </header>
             <div className="mba-layout">
               <nav className="mba-subnav">
-                {AGENT_NAV.map((n) => (
+                {AGENT_NAV.filter(allowed).map((n) => (
                   <NavLink key={n.to} to={n.to} end={n.end} className={({ isActive }) => `subnav-item${isActive ? ' active' : ''}`}>
                     <Icon name={n.icon} size={20} />
                     <span>{n.label}</span>
@@ -122,13 +132,13 @@ export default function AdminLayout() {
                 ))}
               </nav>
               <div className="mba-content">
-                <Outlet />
+                <Outlet context={{ me }} />
               </div>
             </div>
           </>
         ) : (
           <div className="mba-page">
-            <Outlet />
+            <Outlet context={{ me }} />
           </div>
         )}
       </main>

@@ -73,7 +73,7 @@ Tạo `server/.env` từ `server/.env.example` và điền ít nhất `OPENAI_AP
 cd server && npm run dev:memory
 ```
 
-Mở http://localhost:4000 (widget chat) và http://localhost:4000/admin (mặc định `admin` / `admin123` — **đổi trong `.env`**).
+Mở http://localhost:4000 (widget chat) và http://localhost:4000/admin (mặc định `admin` / `admin123` — **đổi trong `.env`**; tài khoản này chỉ dùng để tạo tài khoản quản trị đầu tiên khi DB chưa có người dùng).
 Chế độ `dev:memory` chạy MongoDB in-memory và tự nạp dữ liệu mẫu (catalog phân bón giả lập); dữ liệu mất khi tắt server.
 
 ### Phát triển frontend với hot reload
@@ -125,6 +125,7 @@ Bố cục theo kiểu Business Agent: cột icon bên trái (AI Agent, Hộp th
   **Tiếp quản** / **Trả lại cho Bot**; nhân viên gửi tin sẽ tự tiếp quản.
 - **Đơn hàng** — tìm kiếm, đổi trạng thái (huỷ ⇒ hoàn kho).
 - **Sản phẩm** — CRUD catalog AI dùng để tư vấn.
+- **Người dùng** — tạo tài khoản, vai trò Quản trị viên / Nhân viên, tick quyền từng chức năng.
 
 ## API chính
 
@@ -135,6 +136,7 @@ Bố cục theo kiểu Business Agent: cột icon bên trái (AI Agent, Hộp th
 | POST | `/api/chat/message` | `{sessionId, text}` → tin của khách + câu trả lời |
 | GET/POST | `/webhook/meta` | Xác minh & nhận webhook Messenger/Instagram/WhatsApp |
 | POST | `/api/auth/login` | Đăng nhập admin → JWT |
+| GET | `/api/auth/me` | Thông tin và quyền của người đang đăng nhập |
 | GET | `/api/admin/stats` | Thống kê |
 | GET | `/api/admin/conversations[/:id]` | Danh sách / chi tiết hội thoại |
 | POST | `/api/admin/conversations/:id/messages` | Nhân viên trả lời |
@@ -142,6 +144,8 @@ Bố cục theo kiểu Business Agent: cột icon bên trái (AI Agent, Hộp th
 | GET/PATCH | `/api/admin/orders[/:id]` | Đơn hàng |
 | CRUD | `/api/admin/products`, `/api/admin/knowledge` | Catalog, kiến thức |
 | GET/PUT | `/api/admin/settings` | Cấu hình agent |
+| GET | `/api/admin/permissions` | Danh mục vai trò và quyền |
+| CRUD | `/api/admin/users` | Người dùng & phân quyền |
 
 Sự kiện Socket.IO: `message:new`, `conversation:update`, `order:new`, `order:update`.
 
@@ -170,4 +174,4 @@ xác thực chữ ký.
 - Gửi ảnh sản phẩm / carousel (Messenger generic template, WhatsApp interactive).
 - Tích hợp cổng thanh toán (VNPay, MoMo…) và hãng vận chuyển (GHN, GHTK) qua thêm tool.
 - Nhắc giỏ hàng bị bỏ dở (trong khung 24h), khảo sát sau mua.
-- Nhiều tài khoản nhân viên, phân quyền, phân công hội thoại.
+- Phân công hội thoại cho nhân viên.

@@ -1,9 +1,12 @@
 import { Fragment, useEffect, useState } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { api } from '../api.js';
 import { CHANNEL_LABEL, ORDER_STATUS_LABEL, formatTime, formatVND } from '../format.js';
+import { can } from '../permissions.js';
 import { createAdminSocket } from '../socket.js';
 
 export default function Orders() {
+  const { me } = useOutletContext();
   const [orders, setOrders] = useState([]);
   const [status, setStatus] = useState('');
   const [q, setQ] = useState('');
@@ -78,7 +81,7 @@ export default function Orders() {
                     <select
                       className={`status status-${o.status}`}
                       value={o.status}
-                      disabled={o.status === 'cancelled'}
+                      disabled={o.status === 'cancelled' || !can(me, 'orders.update')}
                       onChange={(e) => changeStatus(o, e.target.value)}
                       aria-label={`Trạng thái đơn ${o.code}`}
                     >

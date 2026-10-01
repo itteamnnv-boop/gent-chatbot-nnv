@@ -1,8 +1,10 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { api } from '../api.js';
 import Avatar from '../components/Avatar.jsx';
 import Icon from '../components/Icons.jsx';
 import { CHANNEL_LABEL, STAGE_LABEL, formatVND, groupMessages, separatorTime, timeAgo } from '../format.js';
+import { can } from '../permissions.js';
 import { createAdminSocket } from '../socket.js';
 
 const FILTERS = [
@@ -55,6 +57,8 @@ function Thread({ messages, name }) {
 }
 
 export default function Inbox() {
+  const { me } = useOutletContext();
+  const canReply = can(me, 'inbox.reply');
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [convs, setConvs] = useState([]);
@@ -196,24 +200,27 @@ export default function Inbox() {
                 <span className="muted">{CHANNEL_LABEL[conv.channel]} · {STAGE_LABEL[conv.stage]}</span>
                 {conv.handoffReason && <span className="handoff-reason">Lý do chuyển: {conv.handoffReason}</span>}
               </div>
-              {conv.mode === 'bot' ? (
-                <button className="btn-secondary" onClick={() => setMode('human')}>Tiếp quản</button>
-              ) : (
-                <button className="btn" onClick={() => setMode('bot')}>Trả lại cho AI</button>
-              )}
+              {canReply &&
+                (conv.mode === 'bot' ? (
+                  <button className="btn-secondary" onClick={() => setMode('human')}>Tiếp quản</button>
+                ) : (
+                  <button className="btn" onClick={() => setMode('bot')}>Trả lại cho AI</button>
+                ))}
             </header>
             <div className="thread-body" ref={threadBody}>
               <Thread messages={detail.messages} name={customerName(conv)} />
             </div>
-            <form className="composer" onSubmit={sendReply}>
-              <input
-                value={reply}
-                onChange={(e) => setReply(e.target.value)}
-                placeholder={conv.mode === 'bot' ? 'Trả lời (sẽ tự tiếp quản từ AI)...' : 'Trả lời...'}
-                aria-label="Trả lời"
-              />
-              <button className="send-btn" disabled={!reply.trim()} aria-label="Gửi"><Icon name="send" /></button>
-            </form>
+            {canReply && (
+              <form className="composer" onSubmit={sendReply}>
+                <input
+                  value={reply}
+                  onChange={(e) => setReply(e.target.value)}
+                  placeholder={conv.mode === 'bot' ? 'Trả lời (sẽ tự tiếp quản từ AI)...' : 'Trả lời...'}
+                  aria-label="Trả lời"
+                />
+                <button className="send-btn" disabled={!reply.trim()} aria-label="Gửi"><Icon name="send" /></button>
+              </form>
+            )}
           </>
         )}
         {error && <p className="error pad">{error}</p>}

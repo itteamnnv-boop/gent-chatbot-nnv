@@ -44,7 +44,7 @@ export async function api(path, { method = 'GET', body } = {}) {
   if (auth.token) headers.Authorization = `Bearer ${auth.token}`;
   const res = await fetch(`/api${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
-  if (res.status === 401 && path.startsWith('/admin')) {
+  if (res.status === 401 && (path.startsWith('/admin') || path === '/auth/me')) {
     auth.clear();
     window.location.assign('/admin/login');
   }

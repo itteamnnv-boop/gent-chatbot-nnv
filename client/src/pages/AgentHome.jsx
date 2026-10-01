@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useOutletContext } from 'react-router-dom';
 import { api } from '../api.js';
 import Icon from '../components/Icons.jsx';
 import Playground from '../components/Playground.jsx';
 import { ChannelsArt, HandoffArt, OrdersArt, TeachArt } from '../components/TipArt.jsx';
+import { can } from '../permissions.js';
 
 const TIPS = [
   { Art: OrdersArt, title: 'Chốt đơn với tác nhân AI', text: 'AI tư vấn, lên giỏ hàng, xin thông tin giao hàng và tạo đơn ngay trong khung chat.', link: '/admin/orders', cta: 'Xem đơn hàng' },
@@ -42,17 +43,19 @@ function Metric({ value, label, hint }) {
 }
 
 export default function AgentHome() {
+  const { me } = useOutletContext();
   const [stats, setStats] = useState(null);
   const [businessName, setBusinessName] = useState('');
   const track = useRef(null);
 
   useEffect(() => {
+    if (can(me, 'settings.view')) api('/admin/settings').then((s) => setBusinessName(s.businessName)).catch(() => {});
+    if (!can(me, 'stats.view')) return undefined;
     const load = () => api('/admin/stats').then(setStats).catch(() => {});
     load();
-    api('/admin/settings').then((s) => setBusinessName(s.businessName)).catch(() => {});
     const t = setInterval(load, 30000);
     return () => clearInterval(t);
-  }, []);
+  }, [me]);
 
   const scrollTips = (dir) => track.current?.scrollBy({ left: dir * 244, behavior: 'smooth' });
   const a = stats?.agent;
@@ -126,7 +129,7 @@ export default function AgentHome() {
       </div>
 
       <aside className="mba-side">
-        <Playground />
+        {can(me, 'playground.use') && <Playground />}
       </aside>
     </div>
   );

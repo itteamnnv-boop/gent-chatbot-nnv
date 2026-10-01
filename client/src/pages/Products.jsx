@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { api } from '../api.js';
 import Modal from '../components/Modal.jsx';
 import { formatVND } from '../format.js';
+import { can } from '../permissions.js';
 
 const EMPTY = { sku: '', name: '', category: '', price: 0, salePrice: '', unit: 'sản phẩm', stock: 0, tags: '', description: '', usage: '', active: true };
 
@@ -20,6 +22,8 @@ function toPayload(f) {
 }
 
 export default function Products() {
+  const { me } = useOutletContext();
+  const canManage = can(me, 'products.manage');
   const [products, setProducts] = useState([]);
   const [editing, setEditing] = useState(null); // null | form object
   const [error, setError] = useState('');
@@ -60,7 +64,7 @@ export default function Products() {
     <>
       <div className="page-head">
         <h1 className="page-title">Sản phẩm</h1>
-        <button className="btn" onClick={() => setEditing({ ...EMPTY })}>+ Thêm sản phẩm</button>
+        {canManage && <button className="btn" onClick={() => setEditing({ ...EMPTY })}>+ Thêm sản phẩm</button>}
       </div>
       <p className="muted">AI chỉ tư vấn & bán sản phẩm đang bật. Mô tả, tags và hướng dẫn sử dụng càng rõ, AI tư vấn càng chính xác.</p>
       {error && !editing && <p className="error">{error}</p>}
@@ -82,8 +86,12 @@ export default function Products() {
                 <td className={`num${p.stock === 0 ? ' error' : ''}`}>{p.stock}</td>
                 <td>{p.active ? <span className="badge badge-ok">Đang bán</span> : <span className="badge">Ẩn</span>}</td>
                 <td className="actions">
-                  <button className="btn-ghost" onClick={() => setEditing(toForm(p))}>Sửa</button>
-                  <button className="btn-ghost danger" onClick={() => remove(p)}>Xoá</button>
+                  {canManage && (
+                    <>
+                      <button className="btn-ghost" onClick={() => setEditing(toForm(p))}>Sửa</button>
+                      <button className="btn-ghost danger" onClick={() => remove(p)}>Xoá</button>
+                    </>
+                  )}
                 </td>
               </tr>
             ))}

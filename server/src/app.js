@@ -8,8 +8,9 @@ import helmet from 'helmet';
 import mongoose from 'mongoose';
 import { Server } from 'socket.io';
 import { config } from './config.js';
-import { verifyAdminToken } from './middleware/auth.js';
-import { setIO } from './realtime.js';
+import { authenticateToken } from './middleware/auth.js';
+import { effectivePermissions } from './permissions.js';
+import { permissionRoom, setIO } from './realtime.js';
 import adminRoutes from './routes/admin.js';
 import authRoutes from './routes/auth.js';
 import chatRoutes, { isValidSessionId } from './routes/chat.js';
@@ -53,10 +54,14 @@ export function createApp() {
   const server = http.createServer(app);
   const io = new Server(server, { cors: { origin: config.clientOrigin } });
   io.on('connection', (socket) => {
-    if (verifyAdminToken(socket.handshake.auth?.token)) socket.join('admin');
     socket.on('web:join', (sessionId) => {
       if (isValidSessionId(sessionId)) socket.join(`web:${sessionId}`);
     });
+    authenticateToken(socket.handshake.auth?.token)
+      .then((user) => {
+        if (user) socket.join(effectivePermissions(user).map(permissionRoom));
+      })
+      .catch(() => {});
   });
   setIO(io);
 

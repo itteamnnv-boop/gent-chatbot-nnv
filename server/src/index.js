@@ -2,6 +2,7 @@ import { assertProductionConfig, config } from './config.js';
 import { connectDB } from './db.js';
 import { createApp } from './app.js';
 import { Product } from './models/Product.js';
+import { ensureBootstrapAdmin } from './services/userService.js';
 import { seedDatabase } from './seedData.js';
 
 assertProductionConfig();
@@ -14,6 +15,9 @@ if (config.mongoUri === 'memory' && (await Product.estimatedDocumentCount()) ===
   await seedDatabase();
   console.log('Đã nạp dữ liệu mẫu');
 }
+
+const bootstrap = await ensureBootstrapAdmin();
+if (bootstrap) console.log(`Đã tạo tài khoản quản trị đầu tiên: ${bootstrap.username}`);
 
 if (!config.openai.apiKey) console.warn('⚠ OPENAI_API_KEY chưa cấu hình — bot sẽ trả lời "hệ thống đang bận"');
 

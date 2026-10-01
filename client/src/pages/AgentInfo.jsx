@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useOutletContext } from 'react-router-dom';
 import { api } from '../api.js';
 import Icon from '../components/Icons.jsx';
 import Modal from '../components/Modal.jsx';
 import Playground from '../components/Playground.jsx';
 import { FIELD_LABEL, PRICE_LIST_TEMPLATE, parseCSV, rowsToProducts } from '../csv.js';
 import { timeAgo } from '../format.js';
+import { can } from '../permissions.js';
 
 const readFileText = (file) =>
   new Promise((resolve, reject) => {
@@ -275,6 +276,7 @@ const Warn = ({ children }) => (
 const Ago = ({ date }) => (date ? <span className="muted small">{timeAgo(date)}</span> : null);
 
 export default function AgentInfo() {
+  const { me } = useOutletContext();
   const navigate = useNavigate();
   const [settings, setSettings] = useState(null);
   const [products, setProducts] = useState([]);
@@ -416,7 +418,7 @@ export default function AgentInfo() {
       </div>
 
       <aside className="mba-side">
-        <Playground />
+        {can(me, 'playground.use') && <Playground />}
       </aside>
 
       {modal?.type === 'faq' && <FaqModal item={modal.item} onClose={() => setModal(null)} onSaved={closeAndReload} />}

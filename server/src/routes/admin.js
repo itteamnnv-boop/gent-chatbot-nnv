@@ -1,27 +1,31 @@
 import { Router } from 'express';
 import mongoose from 'mongoose';
-import { requireAdmin } from '../middleware/auth.js';
+import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { Conversation, STAGES } from '../models/Conversation.js';
 import { Knowledge } from '../models/Knowledge.js';
 import { Message } from '../models/Message.js';
 import { Order, ORDER_STATUSES } from '../models/Order.js';
 import { Product } from '../models/Product.js';
 import { Settings } from '../models/Settings.js';
+import { User } from '../models/User.js';
+import { PERMISSIONS, PERMISSION_KEYS, ROLES } from '../permissions.js';
 import { emitAdmin } from '../realtime.js';
 import { Customer } from '../models/Customer.js';
 import { conversationView, handleIncomingMessage, sendAgentMessage, setConversationMode } from '../services/conversationService.js';
 import { chunkDocument, importPriceList } from '../services/infoImport.js';
+import { countOtherActiveAdmins, userRow } from '../services/userService.js';
+import { PASSWORD_MAX, PASSWORD_MIN, hashPassword, isValidPassword } from '../utils/password.js';
 import { escapeRegex } from '../utils/text.js';
 
 const router = Router();
-router.use(requireAdmin);
+router.use(requireAuth);
 
 const pick = (obj = {}, keys) => Object.fromEntries(keys.filter((k) => obj[k] !== undefined).map((k) => [k, obj[k]]));
 const notFound = (res) => res.status(404).json({ error: 'Không tìm thấy' });
 const validId = (req, res, next) => (mongoose.isValidObjectId(req.params.id) ? next() : notFound(res));
 
 // ---------- Tổng quan ----------
-router.get('/stats', async (_req, res) => {
+router.get('/stats', requirePermission('stats.view'), async (_req, res) => {
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
   const weekAgo = new Date(startOfToday.getTime() - 6 * 86400000);
@@ -81,7 +85,7 @@ router.get('/stats', async (_req, res) => {
 });
 
 // ---------- Hộp thư ----------
-router.get('/conversations', async (req, res) => {
+router.get('/conversations', requirePermission('inbox.view'), async (req, res) => {
   const filter = { channel: { $ne: 'test' } };
   if (['bot', 'human'].includes(req.query.mode)) filter.mode = req.query.mode;
   if (STAGES.includes(req.query.stage)) filter.stage = req.query.stage;
@@ -90,7 +94,7 @@ router.get('/conversations', async (req, res) => {
   res.json(list);
 });
 
-router.get('/conversations/:id', validId, async (req, res) => {
+router.get('/conversations/:id', requirePermission('inbox.view'), validId, async (req, res) => {
   const conversation = await conversationView(req.params.id);
   if (!conversation) return notFound(res);
   const messages = await Message.find({ conversation: conversation._id }).sort({ createdAt: -1 }).limit(300).lean();
@@ -98,21 +102,21 @@ router.get('/conversations/:id', validId, async (req, res) => {
   return res.json({ conversation, messages: messages.reverse(), orders });
 });
 
-router.post('/conversations/:id/messages', validId, async (req, res) => {
+router.post('/conversations/:id/messages', requirePermission('inbox.reply'), validId, async (req, res) => {
   const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
   if (!text) return res.status(400).json({ error: 'Tin nhắn trống' });
-  const message = await sendAgentMessage(req.params.id, text, req.admin.sub);
+  const message = await sendAgentMessage(req.params.id, text, req.user.username);
   return message ? res.json(message) : notFound(res);
 });
 
-router.post('/conversations/:id/mode', validId, async (req, res) => {
+router.post('/conversations/:id/mode', requirePermission('inbox.reply'), validId, async (req, res) => {
   const { mode } = req.body || {};
   if (!['bot', 'human'].includes(mode)) return res.status(400).json({ error: 'mode phải là bot hoặc human' });
-  const conv = await setConversationMode(req.params.id, mode, req.admin.sub);
+  const conv = await setConversationMode(req.params.id, mode, req.user.username);
   return conv ? res.json(conv) : notFound(res);
 });
 
-router.post('/conversations/:id/read', validId, async (req, res) => {
+router.post('/conversations/:id/read', requirePermission('inbox.view'), validId, async (req, res) => {
   await Conversation.updateOne({ _id: req.params.id }, { unreadCount: 0, needsAttention: false });
   res.json({ ok: true });
 });
@@ -121,7 +125,7 @@ router.post('/conversations/:id/read', validId, async (req, res) => {
 // Chủ shop chat với AI như khách hàng. Kênh "test": không hiện trong hộp thư/thống kê, không tạo đơn thật.
 const validTestSession = (id) => typeof id === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(id);
 
-router.post('/playground/message', async (req, res) => {
+router.post('/playground/message', requirePermission('playground.use'), async (req, res) => {
   const { sessionId, text } = req.body || {};
   const clean = typeof text === 'string' ? text.trim() : '';
   if (!validTestSession(sessionId) || !clean || clean.length > 2000) return res.status(400).json({ error: 'Dữ liệu không hợp lệ' });
@@ -133,7 +137,7 @@ router.post('/playground/message', async (req, res) => {
   });
 });
 
-router.delete('/playground/:sessionId', async (req, res) => {
+router.delete('/playground/:sessionId', requirePermission('playground.use'), async (req, res) => {
   if (!validTestSession(req.params.sessionId)) return res.status(400).json({ error: 'sessionId không hợp lệ' });
   const conv = await Conversation.findOne({ channel: 'test', externalId: req.params.sessionId });
   if (conv) {
@@ -145,7 +149,7 @@ router.delete('/playground/:sessionId', async (req, res) => {
 });
 
 // ---------- Đơn hàng ----------
-router.get('/orders', async (req, res) => {
+router.get('/orders', requirePermission('orders.view'), async (req, res) => {
   const filter = {};
   if (ORDER_STATUSES.includes(req.query.status)) filter.status = req.query.status;
   if (req.query.q) {
@@ -155,7 +159,7 @@ router.get('/orders', async (req, res) => {
   res.json(await Order.find(filter).sort({ createdAt: -1 }).limit(300).lean());
 });
 
-router.patch('/orders/:id', validId, async (req, res) => {
+router.patch('/orders/:id', requirePermission('orders.update'), validId, async (req, res) => {
   const order = await Order.findById(req.params.id);
   if (!order) return notFound(res);
   const { status, note } = req.body || {};
@@ -167,7 +171,7 @@ router.patch('/orders/:id', validId, async (req, res) => {
       await Promise.all(order.items.map((i) => Product.updateOne({ _id: i.product }, { $inc: { stock: i.quantity } })));
     }
     order.status = status;
-    order.statusHistory.push({ status, by: req.admin.sub });
+    order.statusHistory.push({ status, by: req.user.username });
   }
   if (typeof note === 'string') order.note = note;
   await order.save();
@@ -178,7 +182,7 @@ router.patch('/orders/:id', validId, async (req, res) => {
 // ---------- Sản phẩm ----------
 const PRODUCT_FIELDS = ['sku', 'name', 'category', 'description', 'usage', 'price', 'salePrice', 'unit', 'stock', 'images', 'tags', 'active'];
 
-router.get('/products', async (req, res) => {
+router.get('/products', requirePermission('products.view'), async (req, res) => {
   const filter = {};
   if (req.query.q) {
     const rx = new RegExp(escapeRegex(String(req.query.q).trim()), 'i');
@@ -188,12 +192,12 @@ router.get('/products', async (req, res) => {
   res.json(await Product.find(filter).sort({ category: 1, name: 1 }));
 });
 
-router.post('/products', async (req, res) => {
+router.post('/products', requirePermission('products.manage'), async (req, res) => {
   const product = await Product.create(pick(req.body, PRODUCT_FIELDS));
   res.status(201).json(product);
 });
 
-router.put('/products/:id', validId, async (req, res) => {
+router.put('/products/:id', requirePermission('products.manage'), validId, async (req, res) => {
   const product = await Product.findById(req.params.id);
   if (!product) return notFound(res);
   product.set(pick(req.body, PRODUCT_FIELDS));
@@ -201,13 +205,13 @@ router.put('/products/:id', validId, async (req, res) => {
   return res.json(product);
 });
 
-router.delete('/products/:id', validId, async (req, res) => {
+router.delete('/products/:id', requirePermission('products.manage'), validId, async (req, res) => {
   const r = await Product.deleteOne({ _id: req.params.id });
   return r.deletedCount ? res.json({ ok: true }) : notFound(res);
 });
 
 // Nhập bảng giá: upsert theo SKU (client đã parse CSV thành rows)
-router.post('/products/import', async (req, res) => {
+router.post('/products/import', requirePermission('products.manage'), async (req, res) => {
   const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
   if (!rows || rows.length === 0) return res.status(400).json({ error: 'Không có dòng dữ liệu nào' });
   if (rows.length > 2000) return res.status(400).json({ error: 'Tối đa 2000 dòng mỗi lần nhập' });
@@ -219,7 +223,7 @@ router.post('/products/import', async (req, res) => {
 });
 
 // ---------- Nguồn: tài liệu tải lên ----------
-router.get('/sources', async (_req, res) => {
+router.get('/sources', requirePermission('knowledge.view'), async (_req, res) => {
   const files = await Knowledge.aggregate([
     { $match: { source: /^file:/ } },
     { $group: { _id: '$source', chunks: { $sum: 1 }, updatedAt: { $max: '$updatedAt' } } },
@@ -228,7 +232,7 @@ router.get('/sources', async (_req, res) => {
   res.json(files.map((f) => ({ name: f._id.slice(5), chunks: f.chunks, updatedAt: f.updatedAt })));
 });
 
-router.post('/sources', async (req, res) => {
+router.post('/sources', requirePermission('knowledge.manage'), async (req, res) => {
   const { fileName, text } = req.body || {};
   const name = typeof fileName === 'string' ? fileName.trim().slice(0, 120) : '';
   if (!name || typeof text !== 'string' || !text.trim()) return res.status(400).json({ error: 'Thiếu tên tệp hoặc nội dung' });
@@ -240,7 +244,7 @@ router.post('/sources', async (req, res) => {
   return res.status(201).json({ name, chunks: chunks.length });
 });
 
-router.delete('/sources/:name', async (req, res) => {
+router.delete('/sources/:name', requirePermission('knowledge.manage'), async (req, res) => {
   const r = await Knowledge.deleteMany({ source: `file:${req.params.name}` });
   return r.deletedCount ? res.json({ ok: true }) : notFound(res);
 });
@@ -248,17 +252,17 @@ router.delete('/sources/:name', async (req, res) => {
 // ---------- Kho kiến thức ----------
 const KNOWLEDGE_FIELDS = ['title', 'content', 'tags', 'active'];
 
-router.get('/knowledge', async (req, res) => {
+router.get('/knowledge', requirePermission('knowledge.view'), async (req, res) => {
   // mặc định chỉ trả mục nhập tay; ?all=1 để lấy cả đoạn trích từ tài liệu
   const filter = req.query.all === '1' ? {} : { source: { $not: /^file:/ } };
   res.json(await Knowledge.find(filter).sort({ updatedAt: -1 }).lean());
 });
 
-router.post('/knowledge', async (req, res) => {
+router.post('/knowledge', requirePermission('knowledge.manage'), async (req, res) => {
   res.status(201).json(await Knowledge.create(pick(req.body, KNOWLEDGE_FIELDS)));
 });
 
-router.put('/knowledge/:id', validId, async (req, res) => {
+router.put('/knowledge/:id', requirePermission('knowledge.manage'), validId, async (req, res) => {
   const doc = await Knowledge.findById(req.params.id);
   if (!doc) return notFound(res);
   doc.set(pick(req.body, KNOWLEDGE_FIELDS));
@@ -266,7 +270,7 @@ router.put('/knowledge/:id', validId, async (req, res) => {
   return res.json(doc);
 });
 
-router.delete('/knowledge/:id', validId, async (req, res) => {
+router.delete('/knowledge/:id', requirePermission('knowledge.manage'), validId, async (req, res) => {
   const r = await Knowledge.deleteOne({ _id: req.params.id });
   return r.deletedCount ? res.json({ ok: true }) : notFound(res);
 });
@@ -284,11 +288,11 @@ const SECTION_FIELDS = {
   payment: ['paymentInfo'],
 };
 
-router.get('/settings', async (_req, res) => {
+router.get('/settings', requirePermission('settings.view'), async (_req, res) => {
   res.json(await Settings.get());
 });
 
-router.put('/settings', async (req, res) => {
+router.put('/settings', requirePermission('settings.manage'), async (req, res) => {
   const settings = await Settings.get();
   settings.set(pick(req.body, SETTINGS_FIELDS));
   const now = new Date();
@@ -297,6 +301,88 @@ router.put('/settings', async (req, res) => {
   }
   await settings.save();
   res.json(settings);
+});
+
+// ---------- Người dùng ----------
+const USER_FIELDS = ['displayName', 'role', 'permissions', 'active'];
+const USERNAME_RE = /^[a-z0-9._-]{3,32}$/;
+const bad = (res, error, status = 400) => res.status(status).json({ error });
+const ADMIN_ONLY = 'Chỉ quản trị viên mới thao tác được tài khoản quản trị';
+const SELF_LOCK = 'Không thể xoá, khoá hoặc đổi quyền tài khoản của chính bạn';
+const LAST_ADMIN = 'Phải còn ít nhất một quản trị viên đang hoạt động';
+
+const validPermissions = (p) => Array.isArray(p) && p.every((k) => typeof k === 'string' && PERMISSION_KEYS.includes(k));
+const sameSet = (a, b) => a.length === b.length && a.every((k) => b.includes(k));
+
+router.get('/permissions', requirePermission('users.manage'), (_req, res) => {
+  res.json({ roles: ROLES, permissions: PERMISSIONS });
+});
+
+router.get('/users', requirePermission('users.manage'), async (_req, res) => {
+  const users = await User.find().sort({ createdAt: 1 });
+  res.json(users.map(userRow));
+});
+
+router.post('/users', requirePermission('users.manage'), async (req, res) => {
+  const username = String(req.body?.username ?? '').trim().toLowerCase();
+  if (!USERNAME_RE.test(username)) return bad(res, 'Tên đăng nhập 3–32 ký tự: chữ thường không dấu, số, dấu . _ -');
+  if (await User.exists({ username })) return bad(res, 'Tên đăng nhập đã tồn tại', 409);
+  const { password } = req.body || {};
+  if (!isValidPassword(password)) return bad(res, `Mật khẩu phải từ ${PASSWORD_MIN} đến ${PASSWORD_MAX} ký tự`);
+  const data = pick(req.body, USER_FIELDS);
+  if (data.role !== undefined && !ROLES.includes(data.role)) return bad(res, 'Vai trò không hợp lệ');
+  if (data.permissions !== undefined && !validPermissions(data.permissions)) return bad(res, 'Quyền không hợp lệ');
+  if (data.active !== undefined && typeof data.active !== 'boolean') return bad(res, 'Trạng thái không hợp lệ');
+  if (req.user.role === 'staff' && data.role === 'admin') return bad(res, ADMIN_ONLY, 403);
+  if (data.permissions !== undefined) data.permissions = [...new Set(data.permissions)];
+  if (data.role === 'admin') data.permissions = [];
+  const user = await User.create({ ...data, username, passwordHash: await hashPassword(password) });
+  res.status(201).json(userRow(user));
+});
+
+router.put('/users/:id', requirePermission('users.manage'), validId, async (req, res) => {
+  const user = await User.findById(req.params.id);
+  if (!user) return notFound(res);
+  const data = pick(req.body, USER_FIELDS);
+  const { password } = req.body || {};
+  const changePassword = typeof password === 'string' && password !== '';
+  if (changePassword && !isValidPassword(password)) return bad(res, `Mật khẩu phải từ ${PASSWORD_MIN} đến ${PASSWORD_MAX} ký tự`);
+  if (data.role !== undefined && !ROLES.includes(data.role)) return bad(res, 'Vai trò không hợp lệ');
+  if (data.permissions !== undefined && !validPermissions(data.permissions)) return bad(res, 'Quyền không hợp lệ');
+  if (data.active !== undefined && typeof data.active !== 'boolean') return bad(res, 'Trạng thái không hợp lệ');
+  if (data.permissions !== undefined) data.permissions = [...new Set(data.permissions)];
+  const finalRole = data.role ?? user.role;
+  if (finalRole === 'admin') data.permissions = [];
+  if (req.user.role === 'staff' && (data.role === 'admin' || user.role === 'admin')) return bad(res, ADMIN_ONLY, 403);
+
+  const finalActive = data.active === undefined ? user.active : Boolean(data.active);
+  const finalPermissions = data.permissions ?? user.permissions;
+  if (req.params.id === String(req.user._id)) {
+    if (finalRole !== user.role || finalActive !== user.active || !sameSet(finalPermissions, user.permissions)) {
+      return bad(res, SELF_LOCK);
+    }
+  }
+  if (user.role === 'admin' && user.active && (finalRole !== 'admin' || !finalActive) && (await countOtherActiveAdmins(user._id)) === 0) {
+    return bad(res, LAST_ADMIN);
+  }
+
+  user.set(data);
+  if (changePassword) {
+    user.passwordHash = await hashPassword(password);
+    user.tokenVersion += 1;
+  }
+  await user.save();
+  return res.json(userRow(user));
+});
+
+router.delete('/users/:id', requirePermission('users.manage'), validId, async (req, res) => {
+  const user = await User.findById(req.params.id);
+  if (!user) return notFound(res);
+  if (req.user.role === 'staff' && user.role === 'admin') return bad(res, ADMIN_ONLY, 403);
+  if (req.params.id === String(req.user._id)) return bad(res, SELF_LOCK);
+  if (user.role === 'admin' && user.active && (await countOtherActiveAdmins(user._id)) === 0) return bad(res, LAST_ADMIN);
+  await user.deleteOne();
+  return res.json({ ok: true });
 });
 
 export default router;
