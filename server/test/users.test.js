@@ -64,7 +64,7 @@ describe('Quản lý người dùng & phân quyền', () => {
     const ok = await login(config.admin.username, config.admin.password);
     assert.equal(ok.status, 200);
     assert.ok(ok.json.token);
-    assert.equal(ok.json.user.permissions.length, 13);
+    assert.equal(ok.json.user.permissions.length, 15);
     assert.deepEqual(ok.json.user.permissions, PERMISSION_KEYS);
     adminToken = ok.json.token;
 

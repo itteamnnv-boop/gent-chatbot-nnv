@@ -10,6 +10,7 @@ describe('Meta webhook', () => {
       object: 'page',
       entry: [
         {
+          id: 'PAGE1',
           messaging: [
             { sender: { id: '111' }, message: { mid: 'm1', text: 'Xin chào' } },
             { sender: { id: 'PAGE' }, message: { mid: 'm2', text: 'echo', is_echo: true } },
@@ -19,9 +20,15 @@ describe('Meta webhook', () => {
       ],
     };
     assert.deepEqual(parseMetaWebhook(body), [
-      { channel: 'messenger', externalId: '111', text: 'Xin chào', externalMessageId: 'm1' },
-      { channel: 'messenger', externalId: '111', text: 'Bắt đầu', externalMessageId: 'm3' },
+      { channel: 'messenger', externalId: '111', text: 'Xin chào', externalMessageId: 'm1', pageId: 'PAGE1' },
+      { channel: 'messenger', externalId: '111', text: 'Bắt đầu', externalMessageId: 'm3', pageId: 'PAGE1' },
     ]);
+  });
+
+  it('entry không có id thì không có khoá pageId', () => {
+    const body = { object: 'page', entry: [{ messaging: [{ sender: { id: '111' }, message: { mid: 'm1', text: 'Xin chào' } }] }] };
+    const [msg] = parseMetaWebhook(body);
+    assert.equal('pageId' in msg, false);
   });
 
   it('parse WhatsApp Cloud API kèm tên', () => {

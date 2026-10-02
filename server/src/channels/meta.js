@@ -10,15 +10,24 @@ async function postGraph(path, token, body) {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`Graph API ${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    const raw = await res.text();
+    const err = new Error(`Graph API ${res.status}: ${raw}`);
+    try {
+      err.graphCode = JSON.parse(raw)?.error?.code;
+    } catch {
+      // body không phải JSON
+    }
+    throw err;
+  }
   return res.json();
 }
 
-// Messenger & Instagram dùng chung Send API của Page
-export async function sendMessengerText(recipientId, text) {
-  if (!config.meta.pageAccessToken) throw new Error('META_PAGE_ACCESS_TOKEN chưa được cấu hình');
+// Messenger & Instagram dùng chung Send API của Page; token của Page được truyền vào
+export async function sendMessengerText(recipientId, text, token) {
+  if (!token) throw new Error('Chưa có Page Access Token cho Page này');
   for (const part of chunkText(text, 1900)) {
-    await postGraph('me/messages', config.meta.pageAccessToken, {
+    await postGraph('me/messages', token, {
       recipient: { id: recipientId },
       messaging_type: 'RESPONSE',
       message: { text: part },
@@ -26,9 +35,9 @@ export async function sendMessengerText(recipientId, text) {
   }
 }
 
-export async function sendMessengerTyping(recipientId) {
-  if (!config.meta.pageAccessToken) return;
-  await postGraph('me/messages', config.meta.pageAccessToken, { recipient: { id: recipientId }, sender_action: 'typing_on' }).catch(() => {});
+export async function sendMessengerTyping(recipientId, token) {
+  if (!token) return;
+  await postGraph('me/messages', token, { recipient: { id: recipientId }, sender_action: 'typing_on' }).catch(() => {});
 }
 
 export async function sendWhatsAppText(to, text) {
@@ -54,9 +63,12 @@ export function verifyMetaSignature(rawBody, header, secret) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+// entry.id của webhook Page/Instagram chính là ID của Page nhận tin
+const pageIdOf = (entry) => (typeof entry.id === 'string' ? { pageId: entry.id } : {});
+
 /**
  * Chuẩn hoá payload webhook Meta (Messenger / Instagram / WhatsApp) thành danh sách tin nhắn vào.
- * @returns {Array<{channel, externalId, text, externalMessageId, profileName?}>}
+ * @returns {Array<{channel, externalId, text, externalMessageId, profileName?, pageId?}>}
  */
 export function parseMetaWebhook(body) {
   const out = [];
@@ -71,9 +83,9 @@ export function parseMetaWebhook(body) {
         if (ev.message) {
           if (ev.message.is_echo) continue; // tin do chính Page gửi
           const text = ev.message.text || ev.message.quick_reply?.payload || (ev.message.attachments?.length ? '[Khách gửi tệp đính kèm]' : '');
-          if (text) out.push({ channel, externalId: senderId, text, externalMessageId: ev.message.mid });
+          if (text) out.push({ channel, externalId: senderId, text, externalMessageId: ev.message.mid, ...pageIdOf(entry) });
         } else if (ev.postback) {
-          out.push({ channel, externalId: senderId, text: ev.postback.title || ev.postback.payload, externalMessageId: ev.postback.mid });
+          out.push({ channel, externalId: senderId, text: ev.postback.title || ev.postback.payload, externalMessageId: ev.postback.mid, ...pageIdOf(entry) });
         }
       }
     }

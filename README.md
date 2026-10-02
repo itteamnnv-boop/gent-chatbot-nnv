@@ -104,9 +104,16 @@ rồi `npm start` (hoặc `npm run dev`).
    Đăng ký field `messages`, `messaging_postbacks` (Messenger/Instagram) hoặc `messages` (WhatsApp).
 4. Điền vào `server/.env`:
    - `META_APP_SECRET` — bắt buộc ở production để xác thực chữ ký `X-Hub-Signature-256`;
-   - `META_PAGE_ACCESS_TOKEN` — Page token cho Messenger/Instagram;
+   - `META_APP_ID` — App ID, dùng cho nút "Kết nối Facebook Page" trong trang quản trị;
+   - `META_OAUTH_REDIRECT_URI` — `https://<domain>/api/meta/oauth/callback`, khai báo y hệt trong
+     Facebook Login > Settings > Valid OAuth Redirect URIs;
+   - `META_PAGE_ACCESS_TOKEN` — Page token **dự phòng** cho Messenger/Instagram: chỉ dùng khi hội thoại chưa có Page
+     hoặc Page chưa được kết nối (vd: hội thoại cũ, Instagram);
    - `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_ACCESS_TOKEN` — cho WhatsApp Cloud API.
-5. Để chạy công khai cần qua **App Review** (quyền `pages_messaging`, …).
+5. Vào **Kênh kết nối** trong trang quản trị, bấm **Kết nối Facebook Page**, đăng nhập Facebook và tick các Page cần dùng.
+   Hệ thống tự lấy Page Access Token và đăng ký webhook cho từng Page (chỉ áp dụng cho Messenger).
+6. Để chạy công khai cần qua **App Review** (quyền `pages_messaging`, `pages_show_list`, `pages_manage_metadata`, `business_management`, …).
+   `business_management` cần để `/me/accounts` trả về cả các Page nằm trong Business Manager.
 
 Lưu ý chính sách Meta: chỉ được nhắn tự do trong **24 giờ** kể từ tin cuối của khách. Ngoài khung này, Messenger cần tag
 `HUMAN_AGENT` (phải xin quyền), WhatsApp cần template đã duyệt.
@@ -125,6 +132,7 @@ Bố cục theo kiểu Business Agent: cột icon bên trái (AI Agent, Hộp th
   **Tiếp quản** / **Trả lại cho Bot**; nhân viên gửi tin sẽ tự tiếp quản.
 - **Đơn hàng** — tìm kiếm, đổi trạng thái (huỷ ⇒ hoàn kho).
 - **Sản phẩm** — CRUD catalog AI dùng để tư vấn.
+- **Kênh kết nối** — kết nối / ngắt kết nối các Facebook Page (Messenger), xem trạng thái token của từng Page.
 - **Người dùng** — tạo tài khoản, vai trò Quản trị viên / Nhân viên, tick quyền từng chức năng.
 
 ## API chính
@@ -137,6 +145,12 @@ Bố cục theo kiểu Business Agent: cột icon bên trái (AI Agent, Hộp th
 | GET/POST | `/webhook/meta` | Xác minh & nhận webhook Messenger/Instagram/WhatsApp |
 | POST | `/api/auth/login` | Đăng nhập admin → JWT |
 | GET | `/api/auth/me` | Thông tin và quyền của người đang đăng nhập |
+| GET | `/api/meta/oauth/callback` | Facebook chuyển hướng về sau khi đăng nhập (công khai, xác thực bằng `state`) |
+| GET | `/api/admin/meta/pages` | Các Page đã kết nối (không trả token) |
+| POST | `/api/admin/meta/oauth/start` | Trả `{url}` để chuyển sang Facebook đăng nhập |
+| GET | `/api/admin/meta/oauth/sessions/:id` | Danh sách Page Facebook trả về, chờ chọn |
+| POST | `/api/admin/meta/pages` | `{sessionId, pageIds}` → đăng ký webhook và lưu Page |
+| DELETE | `/api/admin/meta/pages/:pageId` | Ngắt kết nối Page |
 | GET | `/api/admin/stats` | Thống kê |
 | GET | `/api/admin/conversations[/:id]` | Danh sách / chi tiết hội thoại |
 | POST | `/api/admin/conversations/:id/messages` | Nhân viên trả lời |

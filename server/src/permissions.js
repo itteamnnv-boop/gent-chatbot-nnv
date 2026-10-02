@@ -13,6 +13,8 @@ export const PERMISSIONS = [
   { key: 'settings.view', label: 'Xem cấu hình AI Agent', group: 'AI Agent' },
   { key: 'settings.manage', label: 'Sửa cấu hình AI Agent, bật/tắt AI', group: 'AI Agent' },
   { key: 'playground.use', label: 'Dùng Chat thử', group: 'AI Agent' },
+  { key: 'channels.view', label: 'Xem các Facebook Page đã kết nối', group: 'Kênh kết nối' },
+  { key: 'channels.manage', label: 'Kết nối / ngắt kết nối Facebook Page', group: 'Kênh kết nối' },
   { key: 'users.manage', label: 'Quản lý người dùng & phân quyền', group: 'Hệ thống' },
 ];
 

@@ -4,6 +4,7 @@ import AdminLayout from './pages/AdminLayout.jsx';
 import AgentHome from './pages/AgentHome.jsx';
 import AgentInfo from './pages/AgentInfo.jsx';
 import AgentSettings from './pages/AgentSettings.jsx';
+import Channels from './pages/Channels.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Inbox from './pages/Inbox.jsx';
 import Login from './pages/Login.jsx';
@@ -47,6 +48,7 @@ export default function App() {
         <Route path="orders" element={<RequirePermission perm="orders.view"><Orders /></RequirePermission>} />
         <Route path="products" element={<RequirePermission perm="products.view"><Products /></RequirePermission>} />
         <Route path="stats" element={<RequirePermission perm="stats.view"><Dashboard /></RequirePermission>} />
+        <Route path="channels" element={<RequirePermission perm="channels.view"><Channels /></RequirePermission>} />
         <Route path="users" element={<RequirePermission perm="users.manage"><Users /></RequirePermission>} />
         <Route path="knowledge" element={<Navigate to="/admin/info" replace />} />
       </Route>

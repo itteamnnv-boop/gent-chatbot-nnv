@@ -1,9 +1,11 @@
 import { Router } from 'express';
 import mongoose from 'mongoose';
+import { config } from '../config.js';
 import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { Conversation, STAGES } from '../models/Conversation.js';
 import { Knowledge } from '../models/Knowledge.js';
 import { Message } from '../models/Message.js';
+import { MetaPage } from '../models/MetaPage.js';
 import { Order, ORDER_STATUSES } from '../models/Order.js';
 import { Product } from '../models/Product.js';
 import { Settings } from '../models/Settings.js';
@@ -13,6 +15,7 @@ import { emitAdmin } from '../realtime.js';
 import { Customer } from '../models/Customer.js';
 import { conversationView, handleIncomingMessage, sendAgentMessage, setConversationMode } from '../services/conversationService.js';
 import { chunkDocument, importPriceList } from '../services/infoImport.js';
+import { connectPages, createOAuthState, disconnectPage, getOAuthSession, isOAuthConfigured, pageRow } from '../services/metaPageService.js';
 import { countOtherActiveAdmins, userRow } from '../services/userService.js';
 import { PASSWORD_MAX, PASSWORD_MIN, hashPassword, isValidPassword } from '../utils/password.js';
 import { escapeRegex } from '../utils/text.js';
@@ -22,6 +25,7 @@ router.use(requireAuth);
 
 const pick = (obj = {}, keys) => Object.fromEntries(keys.filter((k) => obj[k] !== undefined).map((k) => [k, obj[k]]));
 const notFound = (res) => res.status(404).json({ error: 'Không tìm thấy' });
+const bad = (res, error, status = 400) => res.status(status).json({ error });
 const validId = (req, res, next) => (mongoose.isValidObjectId(req.params.id) ? next() : notFound(res));
 
 // ---------- Tổng quan ----------
@@ -303,10 +307,42 @@ router.put('/settings', requirePermission('settings.manage'), async (req, res) =
   res.json(settings);
 });
 
+// ---------- Kết nối Facebook Page ----------
+const PAGE_ID_RE = /^\d{1,32}$/;
+const SESSION_GONE = 'Phiên kết nối không tồn tại hoặc đã hết hạn';
+
+router.get('/meta/pages', requirePermission('channels.view'), async (_req, res) => {
+  const pages = await MetaPage.find().sort({ connectedAt: -1 });
+  res.json({ configured: isOAuthConfigured(), envTokenConfigured: Boolean(config.meta.pageAccessToken), pages: pages.map(pageRow) });
+});
+
+router.post('/meta/oauth/start', requirePermission('channels.manage'), (req, res) => {
+  if (!isOAuthConfigured()) return bad(res, 'Chưa cấu hình META_APP_ID / META_APP_SECRET / META_OAUTH_REDIRECT_URI');
+  return res.json({ url: createOAuthState(req.user._id) });
+});
+
+router.get('/meta/oauth/sessions/:id', requirePermission('channels.manage'), async (req, res) => {
+  const session = await getOAuthSession(req.params.id, req.user._id);
+  return session ? res.json(session) : bad(res, SESSION_GONE, 404);
+});
+
+router.post('/meta/pages', requirePermission('channels.manage'), async (req, res) => {
+  const { sessionId, pageIds } = req.body || {};
+  const validIds =
+    Array.isArray(pageIds) && pageIds.length > 0 && pageIds.length <= 100 && pageIds.every((id) => typeof id === 'string' && PAGE_ID_RE.test(id));
+  if (typeof sessionId !== 'string' || !validIds) return bad(res, 'Dữ liệu không hợp lệ');
+  const result = await connectPages(sessionId, req.user._id, [...new Set(pageIds)], req.user.username);
+  return result ? res.json(result) : bad(res, SESSION_GONE, 404);
+});
+
+router.delete('/meta/pages/:pageId', requirePermission('channels.manage'), async (req, res) => {
+  if (!PAGE_ID_RE.test(req.params.pageId)) return notFound(res);
+  return (await disconnectPage(req.params.pageId)) ? res.json({ ok: true }) : notFound(res);
+});
+
 // ---------- Người dùng ----------
 const USER_FIELDS = ['displayName', 'role', 'permissions', 'active'];
 const USERNAME_RE = /^[a-z0-9._-]{3,32}$/;
-const bad = (res, error, status = 400) => res.status(status).json({ error });
 const ADMIN_ONLY = 'Chỉ quản trị viên mới thao tác được tài khoản quản trị';
 const SELF_LOCK = 'Không thể xoá, khoá hoặc đổi quyền tài khoản của chính bạn';
 const LAST_ADMIN = 'Phải còn ít nhất một quản trị viên đang hoạt động';

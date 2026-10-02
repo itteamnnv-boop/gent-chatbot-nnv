@@ -14,6 +14,7 @@ import { permissionRoom, setIO } from './realtime.js';
 import adminRoutes from './routes/admin.js';
 import authRoutes from './routes/auth.js';
 import chatRoutes, { isValidSessionId } from './routes/chat.js';
+import metaOAuthRoutes from './routes/metaOAuth.js';
 import webhookRoutes from './routes/webhook.js';
 
 const clientDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../client/dist');
@@ -34,6 +35,7 @@ export function createApp() {
   app.use('/api/auth', authRoutes);
   app.use('/api/chat', chatRoutes);
   app.use('/api/admin', adminRoutes);
+  app.use('/api/meta', metaOAuthRoutes);
   app.use('/webhook/meta', webhookRoutes);
 
   // Production: phục vụ luôn bản build React

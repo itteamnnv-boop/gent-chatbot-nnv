@@ -20,6 +20,8 @@ const conversationSchema = new mongoose.Schema(
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true },
     channel: { type: String, enum: CHANNELS, required: true },
     externalId: { type: String, required: true },
+    // Page nhận tin (chỉ dùng cho Messenger/Instagram)
+    pageId: { type: String, default: '' },
     // "Thread control" giống Meta: bot đang giữ hội thoại hay nhân viên đã tiếp quản
     mode: { type: String, enum: ['bot', 'human'], default: 'bot' },
     stage: { type: String, enum: STAGES, default: 'new' },

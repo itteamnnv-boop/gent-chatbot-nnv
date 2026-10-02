@@ -25,6 +25,8 @@ export const config = {
   meta: {
     verifyToken: env.META_VERIFY_TOKEN || '',
     appSecret: env.META_APP_SECRET || '',
+    appId: env.META_APP_ID || '',
+    oauthRedirectUri: env.META_OAUTH_REDIRECT_URI || '',
     pageAccessToken: env.META_PAGE_ACCESS_TOKEN || '',
     waPhoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID || '',
     waAccessToken: env.WHATSAPP_ACCESS_TOKEN || '',

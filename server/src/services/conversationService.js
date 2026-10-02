@@ -55,7 +55,7 @@ async function saveMessage(conversation, { role, text, externalId, toolCalls }) 
 async function sendOutbound(conversation, role, text, toolCalls) {
   const message = await saveMessage(conversation, { role, text, toolCalls });
   try {
-    await deliver(conversation.channel, conversation.externalId, text);
+    await deliver(conversation.channel, conversation.externalId, text, { pageId: conversation.pageId });
   } catch (err) {
     console.error(`[deliver:${conversation.channel}]`, err.message);
     await Conversation.updateOne({ _id: conversation._id }, { needsAttention: true });
@@ -98,9 +98,9 @@ async function switchMode(conversation, mode, reason, by) {
 
 /**
  * Điểm vào duy nhất cho mọi tin nhắn của khách, từ mọi kênh.
- * @param {{channel:string, externalId:string, text:string, externalMessageId?:string, profileName?:string, client?:object}} input
+ * @param {{channel:string, externalId:string, text:string, externalMessageId?:string, profileName?:string, pageId?:string, client?:object}} input
  */
-export async function handleIncomingMessage({ channel, externalId, text, externalMessageId, profileName, client }) {
+export async function handleIncomingMessage({ channel, externalId, text, externalMessageId, profileName, pageId, client }) {
   return withLock(`${channel}:${externalId}`, async () => {
     if (externalMessageId && (await Message.exists({ externalId: externalMessageId }))) {
       return { duplicate: true, customerMessage: null, replies: [] };
@@ -113,7 +113,7 @@ export async function handleIncomingMessage({ channel, externalId, text, externa
     );
     const conversation = await Conversation.findOneAndUpdate(
       { channel, externalId },
-      { $setOnInsert: { customer: customer._id, channel, externalId } },
+      { $setOnInsert: { customer: customer._id, channel, externalId }, ...(pageId ? { $set: { pageId } } : {}) },
       { upsert: true, returnDocument: 'after' },
     );
     const settings = await Settings.get();
@@ -134,7 +134,7 @@ export async function handleIncomingMessage({ channel, externalId, text, externa
       return { customerMessage, replies };
     }
 
-    await showTyping(channel, externalId);
+    await showTyping(channel, externalId, { pageId: conversation.pageId });
     try {
       const result = await runAgent({
         conversation,
