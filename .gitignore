@@ -2,3 +2,4 @@ node_modules/
 client/dist/
 .env
 *.log
+.claude/settings.local.json
