@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit",
+      "Write",
+      "Bash(git diff:*)",
+      "Bash(git status:*)",
+      "Bash(npm test:*)",
+      "Bash(mkdir -p docs/bangiao/ket-noi-meta-page)",
+      "Bash(mv .bangiao/ke-hoach.md .bangiao/thay-doi.md .bangiao/ket-qua-test.md .bangiao/danh-gia.md docs/bangiao/ket-noi-meta-page/)",
+      "Bash(git add *)",
+      "Bash(git restore *)",
+      "Bash(grep -iE \"\\\\.env$|webhook\\\\.js$\")"
+    ],
+    "deny": [
+      "Bash(rm:*)",
+      "Bash(git push:*)",
+      "Bash(git checkout:*)",
+      "Bash(curl:*)",
+      "Read(./.env)"
+    ]
+  }
+}

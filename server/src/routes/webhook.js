@@ -8,6 +8,7 @@ const router = Router();
 
 // Bước xác minh khi đăng ký webhook trong Meta App Dashboard
 router.get('/', (req, res) => {
+   console.log('123')
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   if (mode === 'subscribe' && config.meta.verifyToken && token === config.meta.verifyToken) {
@@ -17,6 +18,7 @@ router.get('/', (req, res) => {
 });
 
 router.post('/', (req, res) => {
+  console.log('123')
   if (config.meta.appSecret) {
     if (!verifyMetaSignature(req.rawBody, req.get('x-hub-signature-256'), config.meta.appSecret)) {
       return res.sendStatus(401);
