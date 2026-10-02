@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useOutletContext, useSearchParams } from 'react-router-dom';
+import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
 import { api } from '../api.js';
 import Modal from '../components/Modal.jsx';
 import { formatTime } from '../format.js';
@@ -85,7 +85,7 @@ export default function Channels() {
       <div className="card table-wrap">
         <table>
           <thead>
-            <tr><th>Tên Page</th><th>Page ID</th><th>Trạng thái</th><th>Người kết nối</th><th>Ngày kết nối</th><th /></tr>
+            <tr><th>Tên Page</th><th>Page ID</th><th>Trạng thái</th><th>Khuyến mãi riêng</th><th>Người kết nối</th><th>Ngày kết nối</th><th /></tr>
           </thead>
           <tbody>
             {data.pages.map((p) => (
@@ -95,6 +95,9 @@ export default function Channels() {
                 <td>
                   {p.status === 'active' ? <span className="badge badge-ok">Đang hoạt động</span> : <span className="badge" title={p.lastError}>Cần kết nối lại</span>}
                 </td>
+                <td>
+                  {can(me, 'promotions.view') ? <Link to={`/admin/promotions?page=${p.pageId}`}>{p.promotionCount}</Link> : p.promotionCount}
+                </td>
                 <td>{p.connectedBy}</td>
                 <td>{formatTime(p.connectedAt)}</td>
                 <td className="actions">
@@ -103,7 +106,7 @@ export default function Channels() {
               </tr>
             ))}
             {data.pages.length === 0 && (
-              <tr><td colSpan={6} className="muted">Chưa có Page nào được kết nối.</td></tr>
+              <tr><td colSpan={7} className="muted">Chưa có Page nào được kết nối.</td></tr>
             )}
           </tbody>
         </table>

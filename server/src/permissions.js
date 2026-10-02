@@ -15,6 +15,8 @@ export const PERMISSIONS = [
   { key: 'playground.use', label: 'Dùng Chat thử', group: 'AI Agent' },
   { key: 'channels.view', label: 'Xem các Facebook Page đã kết nối', group: 'Kênh kết nối' },
   { key: 'channels.manage', label: 'Kết nối / ngắt kết nối Facebook Page', group: 'Kênh kết nối' },
+  { key: 'promotions.view', label: 'Xem chương trình khuyến mãi', group: 'Khuyến mãi' },
+  { key: 'promotions.manage', label: 'Thêm / sửa / xoá chương trình khuyến mãi', group: 'Khuyến mãi' },
   { key: 'users.manage', label: 'Quản lý người dùng & phân quyền', group: 'Hệ thống' },
 ];
 

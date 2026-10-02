@@ -8,6 +8,7 @@ import { Message } from '../models/Message.js';
 import { MetaPage } from '../models/MetaPage.js';
 import { Order, ORDER_STATUSES } from '../models/Order.js';
 import { Product } from '../models/Product.js';
+import { Promotion } from '../models/Promotion.js';
 import { Settings } from '../models/Settings.js';
 import { User } from '../models/User.js';
 import { PERMISSIONS, PERMISSION_KEYS, ROLES } from '../permissions.js';
@@ -16,6 +17,7 @@ import { Customer } from '../models/Customer.js';
 import { conversationView, handleIncomingMessage, sendAgentMessage, setConversationMode } from '../services/conversationService.js';
 import { chunkDocument, importPriceList } from '../services/infoImport.js';
 import { connectPages, createOAuthState, disconnectPage, getOAuthSession, isOAuthConfigured, pageRow } from '../services/metaPageService.js';
+import { promotionRow, validatePromotionInput } from '../services/promotionService.js';
 import { countOtherActiveAdmins, userRow } from '../services/userService.js';
 import { PASSWORD_MAX, PASSWORD_MIN, hashPassword, isValidPassword } from '../utils/password.js';
 import { escapeRegex } from '../utils/text.js';
@@ -313,7 +315,17 @@ const SESSION_GONE = 'Phiên kết nối không tồn tại hoặc đã hết h�
 
 router.get('/meta/pages', requirePermission('channels.view'), async (_req, res) => {
   const pages = await MetaPage.find().sort({ connectedAt: -1 });
-  res.json({ configured: isOAuthConfigured(), envTokenConfigured: Boolean(config.meta.pageAccessToken), pages: pages.map(pageRow) });
+  // Số chương trình riêng của từng Page (đang chạy hoặc sắp chạy)
+  const promos = await Promotion.find({ active: true, scope: 'pages', $or: [{ endAt: null }, { endAt: { $gt: new Date() } }] })
+    .select('pageIds')
+    .lean();
+  const promotionCount = {};
+  for (const promo of promos) for (const id of promo.pageIds) promotionCount[id] = (promotionCount[id] || 0) + 1;
+  res.json({
+    configured: isOAuthConfigured(),
+    envTokenConfigured: Boolean(config.meta.pageAccessToken),
+    pages: pages.map((p) => ({ ...pageRow(p), promotionCount: promotionCount[p.pageId] || 0 })),
+  });
 });
 
 router.post('/meta/oauth/start', requirePermission('channels.manage'), (req, res) => {
@@ -338,6 +350,43 @@ router.post('/meta/pages', requirePermission('channels.manage'), async (req, res
 router.delete('/meta/pages/:pageId', requirePermission('channels.manage'), async (req, res) => {
   if (!PAGE_ID_RE.test(req.params.pageId)) return notFound(res);
   return (await disconnectPage(req.params.pageId)) ? res.json({ ok: true }) : notFound(res);
+});
+
+// ---------- Khuyến mãi ----------
+router.get('/promotions', requirePermission('promotions.view'), async (_req, res) => {
+  const now = new Date();
+  const [promotions, pages, products] = await Promise.all([
+    Promotion.find().sort({ createdAt: -1 }),
+    MetaPage.find().select('pageId name status').lean(),
+    Product.find().sort({ name: 1 }),
+  ]);
+  res.json({
+    promotions: promotions.map((p) => promotionRow(p, now)),
+    pages: pages.map(({ pageId, name, status }) => ({ pageId, name, status })),
+    products: products.map(({ _id, sku, name, effectivePrice, active }) => ({ _id, sku, name, effectivePrice, active })),
+  });
+});
+
+router.post('/promotions', requirePermission('promotions.manage'), async (req, res) => {
+  const { data, error } = await validatePromotionInput(req.body || {});
+  if (error) return bad(res, error);
+  const promotion = await Promotion.create({ ...data, createdBy: req.user.username });
+  return res.status(201).json(promotionRow(promotion));
+});
+
+router.put('/promotions/:id', requirePermission('promotions.manage'), validId, async (req, res) => {
+  const doc = await Promotion.findById(req.params.id);
+  if (!doc) return notFound(res);
+  const { data, error } = await validatePromotionInput(req.body || {}, doc);
+  if (error) return bad(res, error);
+  doc.set(data);
+  await doc.save();
+  return res.json(promotionRow(doc));
+});
+
+router.delete('/promotions/:id', requirePermission('promotions.manage'), validId, async (req, res) => {
+  const r = await Promotion.deleteOne({ _id: req.params.id });
+  return r.deletedCount ? res.json({ ok: true }) : notFound(res);
 });
 
 // ---------- Người dùng ----------

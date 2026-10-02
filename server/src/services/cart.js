@@ -17,6 +17,8 @@ export function describeCart(cart, settings) {
       name: i.name,
       unit: i.unit,
       price: i.price,
+      original_price: i.listPrice > i.price ? i.listPrice : undefined,
+      promotion: i.promotion?.name,
       quantity: i.quantity,
       line_total: i.price * i.quantity,
     })),
@@ -24,7 +26,7 @@ export function describeCart(cart, settings) {
     shipping_fee: shippingFee,
     total,
     display: cart.length
-      ? `${cart.map((i) => `${i.name} x${i.quantity} = ${formatVND(i.price * i.quantity)}`).join('; ')} | Tạm tính ${formatVND(subtotal)}, ship ${formatVND(shippingFee)}, tổng ${formatVND(total)}`
+      ? `${cart.map((i) => `${i.name} x${i.quantity}${i.promotion ? ` (KM: ${i.promotion.name})` : ''} = ${formatVND(i.price * i.quantity)}`).join('; ')} | Tạm tính ${formatVND(subtotal)}, ship ${formatVND(shippingFee)}, tổng ${formatVND(total)}`
       : 'Giỏ hàng trống',
   };
 }

@@ -11,6 +11,7 @@ import Login from './pages/Login.jsx';
 import Orders from './pages/Orders.jsx';
 import PlaygroundPage from './pages/PlaygroundPage.jsx';
 import Products from './pages/Products.jsx';
+import Promotions from './pages/Promotions.jsx';
 import ShopDemo from './pages/ShopDemo.jsx';
 import Users from './pages/Users.jsx';
 import { can } from './permissions.js';
@@ -49,6 +50,7 @@ export default function App() {
         <Route path="products" element={<RequirePermission perm="products.view"><Products /></RequirePermission>} />
         <Route path="stats" element={<RequirePermission perm="stats.view"><Dashboard /></RequirePermission>} />
         <Route path="channels" element={<RequirePermission perm="channels.view"><Channels /></RequirePermission>} />
+        <Route path="promotions" element={<RequirePermission perm="promotions.view"><Promotions /></RequirePermission>} />
         <Route path="users" element={<RequirePermission perm="users.manage"><Users /></RequirePermission>} />
         <Route path="knowledge" element={<Navigate to="/admin/info" replace />} />
       </Route>

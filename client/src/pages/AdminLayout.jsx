@@ -23,6 +23,7 @@ const RAIL = [
   { to: '/admin/products', label: 'Sản phẩm', icon: 'box', perm: 'products.view' },
   { to: '/admin/stats', label: 'Thống kê', icon: 'chart', perm: 'stats.view' },
   { to: '/admin/channels', label: 'Kênh kết nối', icon: 'link', perm: 'channels.view' },
+  { to: '/admin/promotions', label: 'Khuyến mãi', icon: 'tag', perm: 'promotions.view' },
   { to: '/admin/users', label: 'Người dùng', icon: 'person', perm: 'users.manage' },
 ];
 

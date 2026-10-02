@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { config } from '../config.js';
 import { Product } from '../models/Product.js';
+import { activePromotionsFor } from '../services/promotionService.js';
 import { buildSystemPrompt } from './prompt.js';
 import { executeTool, toolDefinitions } from './tools.js';
 
@@ -25,10 +26,13 @@ const supportsTemperature = (model) => !/^(o\d|gpt-5)/.test(model);
 export async function runAgent({ conversation, customer, settings, history, client }) {
   const model = settings.model || config.openai.model;
   const categories = (await Product.distinct('category', { active: true })).filter(Boolean);
-  const ctx = { conversation, customer, settings, events: [] };
+  // pageId của Instagram là ID tài khoản IG, không phải Page: chỉ Messenger mới nhận KM riêng của Page
+  const promoPageId = conversation.channel === 'messenger' ? conversation.pageId : '';
+  const promotions = await activePromotionsFor(promoPageId, new Date());
+  const ctx = { conversation, customer, settings, promotions, events: [] };
   const toolLog = [];
 
-  const messages = [{ role: 'system', content: buildSystemPrompt({ settings, conversation, customer, categories }) }, ...history];
+  const messages = [{ role: 'system', content: buildSystemPrompt({ settings, conversation, customer, categories, promotions }) }, ...history];
 
   const call = (extra = {}) =>
     client.chat.completions.create({

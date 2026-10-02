@@ -10,6 +10,8 @@ const cartItemSchema = new mongoose.Schema(
     name: String,
     unit: String,
     price: Number,
+    listPrice: Number,
+    promotion: { type: new mongoose.Schema({ id: mongoose.Schema.Types.ObjectId, name: String }, { _id: false }), default: null },
     quantity: { type: Number, min: 1, required: true },
   },
   { _id: false },

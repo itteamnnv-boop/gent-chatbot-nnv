@@ -99,7 +99,16 @@ export default function Orders() {
                           <h4>Sản phẩm</h4>
                           <ul className="kv">
                             {o.items.map((i) => (
-                              <li key={i.sku}><span>{i.name} ×{i.quantity}</span><strong>{formatVND(i.lineTotal)}</strong></li>
+                              <li key={i.sku}>
+                                <span>
+                                  {i.name} ×{i.quantity}
+                                  {i.promotion && <div className="muted">KM: {i.promotion.name}</div>}
+                                </span>
+                                <strong>
+                                  {formatVND(i.lineTotal)}
+                                  {i.promotion && i.listPrice > i.price && <div className="muted strike">{formatVND(i.listPrice * i.quantity)}</div>}
+                                </strong>
+                              </li>
                             ))}
                             <li><span>Phí ship</span><strong>{formatVND(o.shippingFee)}</strong></li>
                             <li><span>Tổng</span><strong>{formatVND(o.total)}</strong></li>

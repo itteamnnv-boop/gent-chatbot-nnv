@@ -4,6 +4,7 @@ import { Product } from '../models/Product.js';
 import { Knowledge } from '../models/Knowledge.js';
 import { Order } from '../models/Order.js';
 import { cartTotals, describeCart } from '../services/cart.js';
+import { pickBestPromotion } from '../services/promotionService.js';
 import { escapeRegex, isValidPhone, normalize, normalizePhone, tokenize } from '../utils/text.js';
 
 // ---------- Định nghĩa tool cho OpenAI function calling ----------
@@ -61,14 +62,16 @@ export const toolDefinitions = [
 // ---------- Helpers ----------
 const ORDER_STATUS_VI = { new: 'Mới tiếp nhận', confirmed: 'Đã xác nhận', shipping: 'Đang giao', completed: 'Đã giao', cancelled: 'Đã huỷ' };
 
-function productSummary(p) {
+function productSummary(p, promotions) {
+  const r = pickBestPromotion(p, promotions);
   return {
     product_id: String(p._id),
     sku: p.sku,
     name: p.name,
     category: p.category,
-    price: p.effectivePrice,
-    original_price: p.salePrice != null && p.salePrice < p.price ? p.price : undefined,
+    price: r.price,
+    original_price: p.price > r.price ? p.price : undefined,
+    promotion: r.promotion?.name,
     unit: p.unit,
     in_stock: p.stock > 0,
     stock: p.stock,
@@ -119,18 +122,19 @@ const handlers = {
   async search_products({ query, category, max_price: maxPrice }, ctx) {
     const filter = category ? { category: new RegExp(escapeRegex(category), 'i') } : {};
     let products = await scoredSearch(Product, query, { filter, nameField: 'name', limit: 20 });
-    if (maxPrice) products = products.filter((p) => p.effectivePrice <= maxPrice);
+    const promotions = ctx.promotions ?? [];
+    if (maxPrice) products = products.filter((p) => pickBestPromotion(p, promotions).price <= maxPrice);
     products = products.slice(0, 5);
     setStage(ctx.conversation, 'consulting');
     await ctx.conversation.save();
     if (!products.length) return { count: 0, message: 'Không tìm thấy sản phẩm phù hợp. Hỏi lại khách hoặc gợi ý danh mục khác.' };
-    return { count: products.length, products: products.map(productSummary) };
+    return { count: products.length, products: products.map((p) => productSummary(p, promotions)) };
   },
 
-  async get_product_details({ product_id: id }) {
+  async get_product_details({ product_id: id }, ctx) {
     const p = await findProduct(id);
     if (!p || !p.active) return { error: 'Không tìm thấy sản phẩm' };
-    return { ...productSummary(p), description: p.description, usage: p.usage, tags: p.tags };
+    return { ...productSummary(p, ctx.promotions ?? []),description: p.description, usage: p.usage, tags: p.tags };
   },
 
   async search_knowledge({ query }) {
@@ -153,11 +157,14 @@ const handlers = {
       } else {
         const newQty = action === 'add' && idx >= 0 ? conversation.cart[idx].quantity + qty : qty;
         if (newQty > p.stock) return { error: `Chỉ còn ${p.stock} ${p.unit} "${p.name}" trong kho.`, stock: p.stock };
+        const r = pickBestPromotion(p, ctx.promotions ?? []);
         if (idx >= 0) {
           conversation.cart[idx].quantity = newQty;
-          conversation.cart[idx].price = p.effectivePrice;
+          conversation.cart[idx].price = r.price;
+          conversation.cart[idx].listPrice = r.listPrice;
+          conversation.cart[idx].promotion = r.promotion;
         } else {
-          conversation.cart.push({ product: p._id, sku: p.sku, name: p.name, unit: p.unit, price: p.effectivePrice, quantity: newQty });
+          conversation.cart.push({ product: p._id, sku: p.sku, name: p.name, unit: p.unit, price: r.price, listPrice: r.listPrice, promotion: r.promotion, quantity: newQty });
         }
       }
     }
@@ -204,6 +211,26 @@ const handlers = {
     const missing = ['name', 'phone', 'address'].filter((k) => !c[k]);
     if (missing.length) return { error: 'Thiếu thông tin giao hàng', missing };
 
+    // Tính lại giá theo khuyến mãi hiện hành; lệch giá so với giỏ thì cập nhật giỏ và để khách xác nhận lại
+    const promotions = ctx.promotions ?? [];
+    let priceChanged = false;
+    for (const item of conversation.cart) {
+      const p = await Product.findById(item.product);
+      if (!p || !p.active) return { error: `Sản phẩm "${item.name}" không còn bán.` };
+      const r = pickBestPromotion(p, promotions);
+      if (r.price !== item.price) priceChanged = true;
+      item.price = r.price;
+      item.listPrice = r.listPrice;
+      item.promotion = r.promotion;
+    }
+    if (priceChanged) {
+      await conversation.save();
+      return {
+        error: 'Giá đã thay đổi do khuyến mãi thay đổi hoặc hết hạn. Báo khách giỏ hàng và tổng tiền mới, xin xác nhận lại rồi mới tạo đơn.',
+        cart: describeCart(conversation.cart, settings),
+      };
+    }
+
     // Chat thử: mô phỏng tạo đơn, không ghi DB, không trừ kho
     if (conversation.channel === 'test') {
       const totals = cartTotals(conversation.cart, settings);
@@ -235,7 +262,8 @@ const handlers = {
         );
         if (!p) throw new Error(`Sản phẩm "${item.name}" không đủ hàng.`);
         reserved.push(item);
-        items.push({ product: p._id, sku: p.sku, name: p.name, unit: p.unit, price: p.effectivePrice, quantity: item.quantity, lineTotal: p.effectivePrice * item.quantity });
+        // Dùng đúng giá đã kiểm ở bước kiểm giá (item đã được đồng bộ), không tính lại
+        items.push({ product: p._id, sku: p.sku, name: p.name, unit: p.unit, price: item.price, listPrice: item.listPrice, promotion: item.promotion, quantity: item.quantity, lineTotal: item.price * item.quantity });
       }
     } catch (err) {
       await Promise.all(reserved.map((i) => Product.updateOne({ _id: i.product }, { $inc: { stock: i.quantity } })));
@@ -251,6 +279,7 @@ const handlers = {
           conversation: conversation._id,
           customer: customer._id,
           channel: conversation.channel,
+          pageId: conversation.channel === 'messenger' ? conversation.pageId || '' : '',
           items,
           subtotal,
           shippingFee,

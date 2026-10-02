@@ -132,7 +132,9 @@ Bố cục theo kiểu Business Agent: cột icon bên trái (AI Agent, Hộp th
   **Tiếp quản** / **Trả lại cho Bot**; nhân viên gửi tin sẽ tự tiếp quản.
 - **Đơn hàng** — tìm kiếm, đổi trạng thái (huỷ ⇒ hoàn kho).
 - **Sản phẩm** — CRUD catalog AI dùng để tư vấn.
-- **Kênh kết nối** — kết nối / ngắt kết nối các Facebook Page (Messenger), xem trạng thái token của từng Page.
+- **Kênh kết nối** — kết nối / ngắt kết nối các Facebook Page (Messenger), xem trạng thái token của từng Page, xem số khuyến mãi riêng của từng Page.
+- **Khuyến mãi** — chương trình giảm giá (% hoặc số tiền cố định trên mỗi đơn vị), áp dụng chung cho mọi kênh hoặc chỉ cho các Page đã chọn,
+  cho tất cả hoặc một số sản phẩm, có thể đặt thời hạn. Không cộng dồn: mỗi sản phẩm nhận khuyến mãi cho giá thấp nhất.
 - **Người dùng** — tạo tài khoản, vai trò Quản trị viên / Nhân viên, tick quyền từng chức năng.
 
 ## API chính
@@ -151,6 +153,10 @@ Bố cục theo kiểu Business Agent: cột icon bên trái (AI Agent, Hộp th
 | GET | `/api/admin/meta/oauth/sessions/:id` | Danh sách Page Facebook trả về, chờ chọn |
 | POST | `/api/admin/meta/pages` | `{sessionId, pageIds}` → đăng ký webhook và lưu Page |
 | DELETE | `/api/admin/meta/pages/:pageId` | Ngắt kết nối Page |
+| GET | `/api/admin/promotions` | Chương trình khuyến mãi kèm danh sách Page và sản phẩm để chọn |
+| POST | `/api/admin/promotions` | Tạo chương trình khuyến mãi |
+| PUT | `/api/admin/promotions/:id` | Sửa chương trình khuyến mãi |
+| DELETE | `/api/admin/promotions/:id` | Xoá chương trình khuyến mãi |
 | GET | `/api/admin/stats` | Thống kê |
 | GET | `/api/admin/conversations[/:id]` | Danh sách / chi tiết hội thoại |
 | POST | `/api/admin/conversations/:id/messages` | Nhân viên trả lời |
