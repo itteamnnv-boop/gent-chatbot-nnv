@@ -28,3 +28,18 @@ Không chạy lệnh làm thay đổi file hay thay đổi lịch sử git.
 
 Bạn là tuyến phòng thủ cuối. Test xanh mà code sai thì vẫn phải nói CHAN.
 Xanh không đồng nghĩa với đúng.
+
+## Ngôn ngữ
+
+Mọi thứ bạn viết ra đều bằng tiếng Việt có dấu: file bàn giao trong
+.bangiao/, câu hỏi, báo cáo trả về, và chú thích trong code. Đọc file bàn
+giao của agent khác cũng hiểu là tiếng Việt.
+
+Giữ nguyên, không dịch: tên biến, tên hàm, tên file, đường dẫn, lệnh,
+thông báo lỗi gốc và output của công cụ (dán nguyên văn rồi giải thích
+bằng tiếng Việt). Thuật ngữ kỹ thuật không có từ Việt quen dùng (API,
+commit, endpoint...) thì để nguyên.
+
+Ngoại lệ: dòng đầu tiên của .bangiao/danh-gia.md giữ đúng định dạng không
+dấu `PHAN QUYET: CHOT / CAN SUA / CHAN` để phán quyết dễ nhận ra. Phần
+giải thích phía dưới viết tiếng Việt có dấu.

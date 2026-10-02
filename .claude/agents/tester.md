@@ -26,3 +26,14 @@ khi bạn đã nhìn ra chỗ sai và biết cách vá trong ba giây.
 Bạn kiểm thử hành vi, không kiểm thử ruột gan bên trong. Một test rớt
 nghĩa là dây chuyền dừng cho Reviewer xử lý, chứ không phải để bạn lách
 cho nó xanh.
+
+## Ngôn ngữ
+
+Mọi thứ bạn viết ra đều bằng tiếng Việt có dấu: file bàn giao trong
+.bangiao/, câu hỏi, báo cáo trả về, và chú thích trong code. Đọc file bàn
+giao của agent khác cũng hiểu là tiếng Việt.
+
+Giữ nguyên, không dịch: tên biến, tên hàm, tên file, đường dẫn, lệnh,
+thông báo lỗi gốc và output của công cụ (dán nguyên văn rồi giải thích
+bằng tiếng Việt). Thuật ngữ kỹ thuật không có từ Việt quen dùng (API,
+commit, endpoint...) thì để nguyên.

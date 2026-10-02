@@ -4,6 +4,12 @@ description: Chạy trọn dây chuyền bốn agent cho một yêu cầu tính 
 
 Chạy trọn dây chuyền làm tính năng cho: $ARGUMENTS
 
+Toàn bộ dây chuyền dùng tiếng Việt có dấu: lời giao việc bạn viết cho từng
+subagent, các file bàn giao trong .bangiao/, và mọi báo cáo gửi tôi. Khi
+giao việc, nhắc subagent trả lời bằng tiếng Việt. Nếu một file bàn giao
+bị viết bằng tiếng Anh, yêu cầu subagent đó viết lại bằng tiếng Việt rồi
+mới sang chặng kế tiếp.
+
 Làm lần lượt các chặng dưới đây, không nhảy cóc. Sau mỗi chặng, kiểm tra
 file bàn giao đã tồn tại rồi mới sang chặng kế tiếp.
 
