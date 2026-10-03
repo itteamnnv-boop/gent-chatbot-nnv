@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { api, auth } from '../api.js';
+import { api, auth, storage } from '../api.js';
 import Avatar from '../components/Avatar.jsx';
 import Icon from '../components/Icons.jsx';
 import { can } from '../permissions.js';
+import { createAdminSocket, INBOX_READ_EVENT } from '../socket.js';
+
+// Khoá localStorage lưu trạng thái ghim thanh bên
+const PIN_KEY = 'admin_rail_pinned';
 
 // Menu phụ của khu vực AI Agent (giống Business Agent: Trang chủ / Thông tin / Hướng dẫn / Chat thử / Cài đặt)
 const AGENT_NAV = [
@@ -18,7 +22,7 @@ const AGENT_PATHS = AGENT_NAV.map((n) => n.to);
 // Cột icon ngoài cùng bên trái
 const RAIL = [
   { to: '/admin', label: 'AI Agent', icon: 'sparkle', agent: true },
-  { to: '/admin/inbox', label: 'Hộp thư', icon: 'chat', perm: 'inbox.view' },
+  { to: '/admin/inbox', label: 'Hộp thư', icon: 'chat', perm: 'inbox.view', badge: 'inbox' },
   { to: '/admin/orders', label: 'Đơn hàng', icon: 'receipt', perm: 'orders.view' },
   { to: '/admin/products', label: 'Sản phẩm', icon: 'box', perm: 'products.view' },
   { to: '/admin/stats', label: 'Thống kê', icon: 'chart', perm: 'stats.view' },
@@ -64,11 +68,58 @@ function AiToggle({ me }) {
   );
 }
 
+// true khi có hội thoại chưa đọc trong phạm vi người xem; enabled = có quyền inbox.view
+function useInboxUnread(enabled) {
+  const [unread, setUnread] = useState(false);
+
+  useEffect(() => {
+    if (!enabled) {
+      setUnread(false);
+      return undefined;
+    }
+    let alive = true;
+    let timer = null;
+    const load = () => {
+      api('/admin/inbox/pages')
+        .then((r) => {
+          if (alive) setUnread((r.otherUnread || 0) > 0 || (r.pages || []).some((p) => p.unread > 0));
+        })
+        .catch(() => {});
+    };
+    // Gom nhiều sự kiện dồn dập thành một lần gọi API
+    const schedule = () => {
+      clearTimeout(timer);
+      timer = setTimeout(load, 1000);
+    };
+    load();
+    const socket = createAdminSocket();
+    socket.on('conversation:update', schedule);
+    socket.io.on('reconnect', load);
+    window.addEventListener(INBOX_READ_EVENT, schedule);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+      socket.disconnect();
+      window.removeEventListener(INBOX_READ_EVENT, schedule);
+    };
+  }, [enabled]);
+
+  return unread;
+}
+
 export default function AdminLayout() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const isAgent = AGENT_PATHS.includes(pathname.replace(/\/$/, '') || '/admin');
   const [me, setMe] = useState(null);
+  const [pinned, setPinned] = useState(() => storage.get(PIN_KEY) === '1');
+  const hasUnread = useInboxUnread(can(me, 'inbox.view'));
+
+  function togglePin() {
+    const next = !pinned;
+    setPinned(next);
+    storage.set(PIN_KEY, next ? '1' : null);
+  }
 
   useEffect(() => {
     api('/auth/me').then(setMe).catch(() => {});
@@ -78,39 +129,55 @@ export default function AdminLayout() {
   const allowed = (n) => !n.perm || can(me, n.perm);
 
   return (
-    <div className="mba">
+    <div className={`mba${pinned ? ' pinned' : ''}`}>
       <aside className="rail">
-        <div className="rail-brand" title="AI Sales Agent">AI</div>
-        <nav className="rail-nav">
-          {RAIL.filter(allowed).map((r) => (
-            <NavLink
-              key={r.to}
-              to={r.to}
-              end={!r.agent}
-              title={r.label}
-              aria-label={r.label}
-              className={({ isActive }) => `rail-item${(r.agent ? isAgent : isActive) ? ' active' : ''}`}
+        <div className="rail-panel">
+          <div className="rail-row rail-head">
+            <span className="rail-icon"><span className="rail-brand">AI</span></span>
+            <span className="rail-label rail-title">AI Sales Agent</span>
+            <button type="button" className="rail-pin" aria-pressed={pinned} aria-label="Ghim thanh bên" title={pinned ? 'Bỏ ghim thanh bên' : 'Ghim thanh bên'} onClick={togglePin}>
+              <Icon name="pin" size={18} />
+            </button>
+          </div>
+          <nav className="rail-nav">
+            {RAIL.filter(allowed).map((r) => {
+              const dot = r.badge === 'inbox' && hasUnread;
+              return (
+                <NavLink
+                  key={r.to}
+                  to={r.to}
+                  end={!r.agent}
+                  aria-label={dot ? `${r.label} (có tin chưa đọc)` : r.label}
+                  className={({ isActive }) => `rail-item${(r.agent ? isAgent : isActive) ? ' active' : ''}`}
+                >
+                  <span className="rail-icon"><Icon name={r.icon} size={22} />{dot && <span className="rail-dot" />}</span>
+                  <span className="rail-label">{r.label}</span>
+                </NavLink>
+              );
+            })}
+          </nav>
+          <div className="rail-bottom">
+            <a className="rail-item" href="/" target="_blank" rel="noreferrer" aria-label="Mở widget chat">
+              <span className="rail-icon"><Icon name="external" size={22} /></span>
+              <span className="rail-label">Mở widget chat</span>
+            </a>
+            <button
+              type="button"
+              className="rail-item"
+              aria-label="Đăng xuất"
+              onClick={() => {
+                auth.clear();
+                navigate('/admin/login');
+              }}
             >
-              <Icon name={r.icon} size={22} />
-            </NavLink>
-          ))}
-        </nav>
-        <div className="rail-bottom">
-          <a className="rail-item" href="/" target="_blank" rel="noreferrer" title="Mở widget chat" aria-label="Mở widget chat">
-            <Icon name="external" size={22} />
-          </a>
-          <button
-            className="rail-item"
-            title="Đăng xuất"
-            aria-label="Đăng xuất"
-            onClick={() => {
-              auth.clear();
-              navigate('/admin/login');
-            }}
-          >
-            <Icon name="logout" size={22} />
-          </button>
-          <Avatar name={me.displayName || me.username} size={32} />
+              <span className="rail-icon"><Icon name="logout" size={22} /></span>
+              <span className="rail-label">Đăng xuất</span>
+            </button>
+            <div className="rail-row rail-user">
+              <span className="rail-icon"><Avatar name={me.displayName || me.username} size={32} /></span>
+              <span className="rail-label">{me.displayName || me.username}</span>
+            </div>
+          </div>
         </div>
       </aside>
 

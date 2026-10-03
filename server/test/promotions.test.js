@@ -68,6 +68,7 @@ describe('Khuyến mãi', () => {
   let admin;
   let staffNone;
   let staffView;
+  let staffPlay;
   let npk;
   let ure;
   let seq = 0;
@@ -91,9 +92,11 @@ describe('Khuyến mãi', () => {
     await User.create({ username: 'admin1', role: 'admin', passwordHash });
     await User.create({ username: 'nv-none', role: 'staff', permissions: ['orders.view'], passwordHash });
     await User.create({ username: 'nv-view', role: 'staff', permissions: ['promotions.view'], passwordHash });
-    admin = await tokenOf('admin1');
+    await User.create({ username: 'nv-play', role: 'staff', permissions: ['playground.use'], passwordHash });
+    admin =await tokenOf('admin1');
     staffNone = await tokenOf('nv-none');
     staffView = await tokenOf('nv-view');
+    staffPlay = await tokenOf('nv-play');
     npk = await Product.findOne({ sku: 'NPK-16168' });
     ure = await Product.findOne({ sku: 'URE-46' });
   });
@@ -222,6 +225,51 @@ describe('Khuyến mãi', () => {
       }
     });
 
+    it('GET /playground/pages: cần quyền playground.use, chỉ trả pageId/name/status/botEnabled', async () => {
+      assert.equal((await call('GET', '/api/admin/playground/pages', { token: staffNone })).status, 403);
+      assert.equal((await call('GET', '/api/admin/playground/pages', { token: staffView })).status, 403);
+      const res = await call('GET', '/api/admin/playground/pages', { token: staffPlay });
+      assert.equal(res.status, 200);
+      const ids = res.json.pages.map((p) => p.pageId);
+      assert.ok(ids.includes('111') && ids.includes('222'));
+      for (const p of res.json.pages) assert.deepEqual(Object.keys(p).sort(), ['botEnabled', 'name', 'pageId', 'status']);
+      assert.doesNotMatch(res.text, /TOK/);
+    });
+
+    it('POST /playground/message: pageId không hợp lệ bị từ chối và không tạo phiên', async () => {
+      for (const pageId of ['999', 'abc', 111]) {
+        const sessionId = newId('test');
+        const res = await call('POST', '/api/admin/playground/message', { token: admin, body: { sessionId, text: 'hi', pageId } });
+        assert.equal(res.status, 400);
+        assert.equal(res.json.error, 'Page không hợp lệ hoặc đã ngắt kết nối');
+        assert.equal(await Conversation.countDocuments({ channel: 'test', externalId: sessionId }), 0);
+      }
+    });
+
+    it('POST /playground/message: phiên đã gắn Page khác thì trả 409', async () => {
+      const sid = newId('test');
+      await send('test', sid, 'hi', scriptedClient([say('ok')]), '111');
+      assert.equal((await Conversation.findOne({ channel: 'test', externalId: sid })).pageId, '111');
+      const other = await call('POST', '/api/admin/playground/message', { token: admin, body: { sessionId: sid, text: 'hi', pageId: '222' } });
+      assert.equal(other.status, 409);
+      assert.equal(other.json.error, 'Phiên chat thử đang gắn với Page khác, hãy làm mới đoạn chat');
+      const none = await call('POST', '/api/admin/playground/message', { token: admin, body: { sessionId: sid, text: 'hi' } });
+      assert.equal(none.status, 409);
+    });
+
+    it('POST /playground/message: Page bị ngắt giữa phiên thì trả 400', async () => {
+      const sid = newId('test');
+      await send('test', sid, 'hi', scriptedClient([say('ok')]), '111');
+      await MetaPage.deleteOne({ pageId: '111' });
+      try {
+        const res = await call('POST', '/api/admin/playground/message', { token: admin, body: { sessionId: sid, text: 'hi', pageId: '111' } });
+        assert.equal(res.status, 400);
+        assert.equal(res.json.error, 'Page không hợp lệ hoặc đã ngắt kết nối');
+      } finally {
+        await addPage('111');
+      }
+    });
+
     it('GET /meta/pages có promotionCount đúng', async () => {
       await promo({ scope: 'pages', pageIds: ['111'] });
       await promo({ name: 'chung' });
@@ -328,7 +376,7 @@ describe('Khuyến mãi', () => {
       });
     }
 
-    it('kênh test / web (pageId rỗng) không bao giờ nhận khuyến mãi riêng của Page', async () => {
+    it('kênh test (không chọn Page) / web không bao giờ nhận khuyến mãi riêng của Page', async () => {
       await promo({ name: 'Riêng 111', scope: 'pages', pageIds: ['111'] });
       for (const channel of ['test', 'web']) {
         const client = scriptedClient([toolCall('get_product_details', { product_id: String(ure._id) }), say('ok')]);
@@ -338,6 +386,34 @@ describe('Khuyến mãi', () => {
         assert.equal(result.promotion, undefined);
         assert.doesNotMatch(systemPrompt(client), /# Khuyến mãi đang áp dụng/);
       }
+    });
+
+    it('Chat thử chọn Page: Page 111 nhận khuyến mãi riêng, Page 222 thì không', async () => {
+      await promo({ name: 'Riêng 111', scope: 'pages', pageIds: ['111'] });
+      const c1 = scriptedClient([toolCall('get_product_details', { product_id: String(ure._id) }), say('ok')]);
+      await send('test', newId('test'), 'urê giá bao nhiêu', c1, '111');
+      const r1 = toolResult(c1, 1);
+      assert.equal(r1.price, 585000);
+      assert.equal(r1.promotion, 'Riêng 111');
+      assert.match(systemPrompt(c1), /Riêng 111/);
+
+      const c2 = scriptedClient([toolCall('get_product_details', { product_id: String(ure._id) }), say('ok')]);
+      await send('test', newId('test'), 'urê giá bao nhiêu', c2, '222');
+      const r2 = toolResult(c2, 1);
+      assert.equal(r2.price, 650000);
+      assert.equal(r2.promotion, undefined);
+    });
+
+    it('chốt đơn Chat thử có chọn Page vẫn chỉ là mô phỏng', async () => {
+      await promo({ name: 'Riêng 10%', scope: 'pages', pageIds: ['111'] });
+      const ordersBefore = await Order.countDocuments();
+      const stockBefore = (await Product.findById(npk._id)).stock;
+      const client = await buy('test', newId('test'), '111');
+      const result = toolResult(client, 3);
+      assert.equal(result.test_mode, true);
+      assert.equal(result.subtotal, 2 * 359100);
+      assert.equal(await Order.countDocuments(), ordersBefore);
+      assert.equal((await Product.findById(npk._id)).stock, stockBefore);
     });
   });
 });

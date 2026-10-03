@@ -110,6 +110,7 @@ export default function Orders() {
                                 </strong>
                               </li>
                             ))}
+                            {o.discount > 0 && <li><span>Giảm theo nhân viên{o.staffDiscount?.staffName ? ` (${o.staffDiscount.staffName})` : ''}</span><strong>-{formatVND(o.discount)}</strong></li>}
                             <li><span>Phí ship</span><strong>{formatVND(o.shippingFee)}</strong></li>
                             <li><span>Tổng</span><strong>{formatVND(o.total)}</strong></li>
                           </ul>

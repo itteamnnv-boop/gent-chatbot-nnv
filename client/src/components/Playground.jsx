@@ -8,7 +8,8 @@ const DEFAULT_SUGGESTIONS = ['Bạn có chấp nhận đổi trả hàng không?
 const newSessionId = () => `test-${crypto.randomUUID()}`;
 const sideOf = (m) => (m.role === 'system' ? 'system' : m.role === 'customer' ? 'me' : 'them');
 
-// "Đoạn chat thử nghiệm": chủ shop đóng vai khách để xem AI phản hồi (kênh test, không tạo đơn thật)
+// "Đoạn chat thử nghiệm": chủ shop đóng vai khách để xem AI phản hồi (kênh test, không tạo đơn thật);
+// có thể giả lập tin nhắn từ một Page để áp khuyến mãi riêng của Page
 export default function Playground({ large = false }) {
   const [sessionId, setSessionId] = useState(newSessionId);
   const [messages, setMessages] = useState([]);
@@ -17,11 +18,14 @@ export default function Playground({ large = false }) {
   const [error, setError] = useState('');
   const [cfg, setCfg] = useState(null);
   const [suggestions, setSuggestions] = useState(DEFAULT_SUGGESTIONS);
+  const [pages, setPages] = useState([]);
+  const [pageId, setPageId] = useState('');
   const bodyRef = useRef(null);
   const seq = useRef(0);
 
   useEffect(() => {
     api('/admin/settings').then(setCfg).catch(() => {});
+    api('/admin/playground/pages').then((d) => setPages(d.pages)).catch(() => {});
     api('/admin/knowledge')
       .then((list) => {
         const fromKb = list.filter((k) => k.active).slice(0, 3).map((k) => `Cho tôi biết về ${k.title.toLowerCase()}?`);
@@ -44,10 +48,10 @@ export default function Playground({ large = false }) {
     setMessages((m) => [...m, { _id: `local-${seq.current}`, role: 'customer', text: t, createdAt: new Date().toISOString() }]);
     setPending(true);
     try {
-      const d = await api('/admin/playground/message', { method: 'POST', body: { sessionId, text: t } });
+      const d = await api('/admin/playground/message', { method: 'POST', body: { sessionId, text: t, ...(pageId ? { pageId } : {}) } });
       const extra = d.replies.length
         ? d.replies
-        : [{ _id: `sys-${seq.current}`, role: 'system', text: 'AI đã chuyển cuộc trò chuyện cho nhân viên nên không trả lời nữa. Bấm làm mới để thử lại.', createdAt: new Date().toISOString() }];
+        : [{ _id: `sys-${seq.current}`, role: 'system', text: d.pageBotOff ? 'Bot đang tắt trả lời tự động cho Page này nên AI không trả lời. Bật lại ở mục Kênh kết nối hoặc chọn Page khác.' : 'AI đã chuyển cuộc trò chuyện cho nhân viên nên không trả lời nữa. Bấm làm mới để thử lại.', createdAt: new Date().toISOString() }];
       setMessages((m) => [...m, ...extra]);
     } catch (err) {
       setError(err.message);
@@ -63,12 +67,27 @@ export default function Playground({ large = false }) {
     setError('');
   }
 
+  // Đổi Page = bắt đầu lại đoạn chat để giỏ hàng không còn giá của Page cũ
+  function changePage(next) {
+    if (next === pageId) return;
+    if (messages.length > 0 && !window.confirm('Đổi Page sẽ bắt đầu lại đoạn chat thử. Tiếp tục?')) return;
+    setPageId(next);
+    reset();
+  }
+
   const botName = cfg?.botName || 'AI';
   const rows = groupMessages(messages, sideOf);
 
   return (
     <section className={`pg${large ? ' pg-large' : ''}`}>
       <div className="pg-top">
+        {pages.length > 0 && (
+          <select value={pageId} onChange={(e) => changePage(e.target.value)} disabled={pending}
+                  aria-label="Giả lập tin nhắn từ Page" title="Giả lập khách nhắn tới Page này để áp dụng khuyến mãi riêng của Page">
+            <option value="">Không chọn Page (chỉ khuyến mãi chung)</option>
+            {pages.map((p) => <option key={p.pageId} value={p.pageId}>{p.name || p.pageId}{p.status !== 'active' ? ' (cần kết nối lại)' : ''}{p.botEnabled === false ? ' (bot đang tắt)' : ''}</option>)}
+          </select>
+        )}
         <button className="pg-icon-btn" onClick={reset} title="Bắt đầu lại đoạn chat" aria-label="Làm mới đoạn chat">
           <Icon name="refresh" />
         </button>

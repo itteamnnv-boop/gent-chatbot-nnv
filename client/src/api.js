@@ -1,6 +1,6 @@
 const TOKEN_KEY = 'admin_token';
 
-const storage = {
+export const storage = {
   get(key) {
     try {
       return localStorage.getItem(key);

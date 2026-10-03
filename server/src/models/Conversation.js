@@ -17,12 +17,29 @@ const cartItemSchema = new mongoose.Schema(
   { _id: false },
 );
 
+// Ưu đãi riêng do nhân viên hứa trong hội thoại, AI áp qua apply_staff_discount
+export const staffDiscountSchema = new mongoose.Schema(
+  {
+    messageId: { type: mongoose.Schema.Types.ObjectId, required: true },
+    staffName: { type: String, default: '' },
+    kind: { type: String, enum: ['amount', 'percent', 'unit_price'], required: true },
+    value: { type: Number, required: true },
+    perUnit: { type: Boolean, default: false },
+    productId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    productName: { type: String, default: '' },
+    minQuantity: { type: Number, default: 0 },
+    note: { type: String, default: '' },
+    appliedAt: { type: Date, default: Date.now },
+  },
+  { _id: false },
+);
+
 const conversationSchema = new mongoose.Schema(
   {
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true },
     channel: { type: String, enum: CHANNELS, required: true },
     externalId: { type: String, required: true },
-    // Page nhận tin (chỉ dùng cho Messenger/Instagram)
+    // Page nhận tin (Messenger/Instagram) hoặc Page đang giả lập (Chat thử)
     pageId: { type: String, default: '' },
     // "Thread control" giống Meta: bot đang giữ hội thoại hay nhân viên đã tiếp quản
     mode: { type: String, enum: ['bot', 'human'], default: 'bot' },
@@ -30,6 +47,7 @@ const conversationSchema = new mongoose.Schema(
     handoffReason: { type: String, default: '' },
     needsAttention: { type: Boolean, default: false },
     cart: { type: [cartItemSchema], default: [] },
+    staffDiscount: { type: staffDiscountSchema, default: null },
     checkout: {
       name: { type: String, default: '' },
       phone: { type: String, default: '' },

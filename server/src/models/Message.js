@@ -10,6 +10,8 @@ const messageSchema = new mongoose.Schema(
     externalId: { type: String },
     // Log các tool AI đã gọi trong lượt này (để admin debug)
     toolCalls: { type: [mongoose.Schema.Types.Mixed], default: undefined },
+    // Tên đăng nhập của nhân viên gửi tin (chỉ có với role 'agent')
+    author: { type: String },
   },
   { timestamps: true },
 );

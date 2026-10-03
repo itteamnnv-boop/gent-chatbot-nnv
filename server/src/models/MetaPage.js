@@ -10,6 +10,8 @@ const metaPageSchema = new mongoose.Schema(
     tasks: { type: [String], default: [] },
     status: { type: String, enum: PAGE_STATUSES, default: 'active' },
     lastError: { type: String, default: '' },
+    // Bật/tắt trả lời tự động của bot cho riêng Page này (công tắc tổng ở Settings.botEnabled)
+    botEnabled: { type: Boolean, default: true },
     connectedBy: { type: String, default: '' },
     connectedAt: { type: Date, default: Date.now },
   },

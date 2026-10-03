@@ -126,7 +126,7 @@ Bố cục theo kiểu Business Agent: cột icon bên trái (AI Agent, Hộp th
   việc cần xử lý, đơn hàng mới, và **Đoạn chat thử nghiệm** bên phải.
 - **AI Agent → Thông tin của bạn / Hướng dẫn / Chat thử / Cài đặt** — thông tin doanh nghiệp + câu hỏi thường gặp;
   giọng điệu + quy tắc chuyển nhân viên; chat thử toàn màn hình; model OpenAI.
-  Chat thử dùng kênh riêng `test`: không hiện trong Hộp thư/thống kê, đơn tạo ra chỉ là mô phỏng (không lưu, không trừ kho).
+  Chat thử dùng kênh riêng `test`: không hiện trong Hộp thư/thống kê, đơn tạo ra chỉ là mô phỏng (không lưu, không trừ kho). Có thể chọn một Page để giả lập khách nhắn tới Page đó: AI áp dụng khuyến mãi chung và khuyến mãi riêng của Page; đổi Page sẽ bắt đầu lại đoạn chat.
 - **Thống kê** — doanh thu, số hội thoại, tỉ lệ chốt đơn, số hội thoại chờ nhân viên.
 - **Hộp thư** — realtime mọi kênh; lọc Bot/Nhân viên/Cần chú ý; xem giỏ hàng, thông tin giao hàng, đơn; xem log tool AI đã gọi;
   **Tiếp quản** / **Trả lại cho Bot**; nhân viên gửi tin sẽ tự tiếp quản.
@@ -153,6 +153,7 @@ Bố cục theo kiểu Business Agent: cột icon bên trái (AI Agent, Hộp th
 | GET | `/api/admin/meta/oauth/sessions/:id` | Danh sách Page Facebook trả về, chờ chọn |
 | POST | `/api/admin/meta/pages` | `{sessionId, pageIds}` → đăng ký webhook và lưu Page |
 | DELETE | `/api/admin/meta/pages/:pageId` | Ngắt kết nối Page |
+| GET | `/api/admin/playground/pages` | Danh sách Page để chọn giả lập trong Chat thử (quyền playground.use) |
 | GET | `/api/admin/promotions` | Chương trình khuyến mãi kèm danh sách Page và sản phẩm để chọn |
 | POST | `/api/admin/promotions` | Tạo chương trình khuyến mãi |
 | PUT | `/api/admin/promotions/:id` | Sửa chương trình khuyến mãi |

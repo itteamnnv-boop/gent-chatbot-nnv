@@ -1,21 +1,30 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
-import { useOutletContext } from 'react-router-dom';
+import { useOutletContext, useSearchParams } from 'react-router-dom';
 import { api } from '../api.js';
 import Avatar from '../components/Avatar.jsx';
 import Icon from '../components/Icons.jsx';
 import { CHANNEL_LABEL, STAGE_LABEL, formatVND, groupMessages, separatorTime, timeAgo } from '../format.js';
 import { can } from '../permissions.js';
-import { createAdminSocket } from '../socket.js';
+import { createAdminSocket, INBOX_READ_EVENT } from '../socket.js';
 
 const FILTERS = [
-  { key: 'all', label: 'Tất cả', query: '' },
-  { key: 'bot', label: 'AI xử lý', query: '?mode=bot' },
-  { key: 'human', label: 'Nhân viên', query: '?mode=human' },
-  { key: 'attention', label: 'Cần chú ý', query: '?attention=1' },
+  { key: 'all', label: 'Tất cả', query: {} },
+  { key: 'bot', label: 'AI xử lý', query: { mode: 'bot' } },
+  { key: 'human', label: 'Nhân viên', query: { mode: 'human' } },
+  { key: 'attention', label: 'Cần chú ý', query: { attention: '1' } },
 ];
 
-const matchesFilter = (c, key) =>
+const PAGE_PARAM_RE = /^\d{1,32}$/;
+const EMPTY_PAGES = { restricted: false, canSeeOther: true, otherUnread: 0, pages: [] };
+
+// Trùng định nghĩa phía server: "Ngoài Fanpage" = không phải test và (không phải Messenger hoặc chưa có pageId)
+const isOtherSource = (c) => c.channel !== 'test' && (c.channel !== 'messenger' || !c.pageId);
+
+const matchesPage = (c, page) => !page || (page === 'none' ? isOtherSource(c) : c.channel === 'messenger' && c.pageId === page);
+
+const matchesFilter = (c, key, page) =>
   c.channel !== 'test' &&
+  matchesPage(c, page) &&
   (key === 'all' || (key === 'bot' && c.mode === 'bot') || (key === 'human' && c.mode === 'human') || (key === 'attention' && c.needsAttention));
 
 const customerName = (c) => c.customer?.name || c.checkout?.name || `Khách ${CHANNEL_LABEL[c.channel]} ${c.externalId.slice(-4)}`;
@@ -59,7 +68,11 @@ function Thread({ messages, name }) {
 export default function Inbox() {
   const { me } = useOutletContext();
   const canReply = can(me, 'inbox.reply');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawPage = searchParams.get('page') || '';
+  const page = rawPage === 'none' || PAGE_PARAM_RE.test(rawPage) ? rawPage : '';
   const [filter, setFilter] = useState('all');
+  const [inboxPages, setInboxPages] = useState(EMPTY_PAGES);
   const [search, setSearch] = useState('');
   const [convs, setConvs] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -68,26 +81,55 @@ export default function Inbox() {
   const [error, setError] = useState('');
   const selectedRef = useRef(null);
   const filterRef = useRef(filter);
+  const pageRef = useRef(page);
+  const listSeq = useRef(0);
+  const pagesTimer = useRef(null);
   const threadBody = useRef(null);
   selectedRef.current = selectedId;
   filterRef.current = filter;
+  pageRef.current = page;
+
+  // URL là nguồn sự thật duy nhất của bộ chọn Page; giá trị rác thì xoá khỏi URL
+  useEffect(() => {
+    if (rawPage !== page) setSearchParams({}, { replace: true });
+  }, [rawPage, page, setSearchParams]);
+
+  const changePage = (next) => setSearchParams(next ? { page: next } : {}, { replace: true });
 
   const loadList = useCallback(() => {
-    const q = FILTERS.find((f) => f.key === filter).query;
-    api(`/admin/conversations${q}`).then(setConvs).catch((e) => setError(e.message));
-  }, [filter]);
+    const params = new URLSearchParams(FILTERS.find((f) => f.key === filter).query);
+    if (page) params.set('page', page);
+    const qs = params.toString();
+    const seq = (listSeq.current += 1);
+    // Bỏ phản hồi cũ nếu người dùng đã đổi bộ lọc trong lúc chờ
+    api(`/admin/conversations${qs ? `?${qs}` : ''}`)
+      .then((list) => {
+        if (seq === listSeq.current) setConvs(list);
+      })
+      .catch((e) => {
+        if (seq === listSeq.current) setError(e.message);
+      });
+  }, [filter, page]);
 
   useEffect(() => {
     loadList();
   }, [loadList]);
 
+  const loadPages = useCallback(() => {
+    api('/admin/inbox/pages').then(setInboxPages).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    loadPages();
+  }, [loadPages]);
+
   useEffect(() => {
     if (!selectedId) return;
     setDetail(null);
     api(`/admin/conversations/${selectedId}`).then(setDetail).catch((e) => setError(e.message));
-    api(`/admin/conversations/${selectedId}/read`, { method: 'POST' }).catch(() => {});
+    api(`/admin/conversations/${selectedId}/read`, { method: 'POST' }).then(() => { loadPages(); window.dispatchEvent(new Event(INBOX_READ_EVENT)); }).catch(() => {});
     setConvs((list) => list.map((c) => (c._id === selectedId ? { ...c, unreadCount: 0 } : c)));
-  }, [selectedId]);
+  }, [selectedId, loadPages]);
 
   useEffect(() => {
     const el = threadBody.current;
@@ -102,19 +144,30 @@ export default function Inbox() {
     });
     socket.on('conversation:update', (c) => {
       if (!c) return;
+      clearTimeout(pagesTimer.current);
+      pagesTimer.current = setTimeout(loadPages, 1000);
       const isOpen = c._id === selectedRef.current;
       const view = isOpen ? { ...c, unreadCount: 0 } : c;
       setConvs((list) => {
         const rest = list.filter((x) => x._id !== c._id);
-        return matchesFilter(c, filterRef.current) ? [view, ...rest] : rest;
+        return matchesFilter(c, filterRef.current, pageRef.current) ? [view, ...rest] : rest;
       });
       if (isOpen) setDetail((d) => (d ? { ...d, conversation: c } : d));
+    });
+    socket.on('page:bot', ({ pageId, botEnabled }) => {
+      const patch = (c) => (c.channel === 'messenger' && c.pageId === pageId ? { ...c, pageBotOff: !botEnabled } : c);
+      setConvs((list) => list.map(patch));
+      setDetail((d) => (d ? { ...d, conversation: patch(d.conversation) } : d));
+      setInboxPages((ip) => ({ ...ip, pages: ip.pages.map((p) => (p.pageId === pageId ? { ...p, botEnabled } : p)) }));
     });
     socket.on('order:new', (o) => {
       if (String(o.conversation) === selectedRef.current) setDetail((d) => (d ? { ...d, orders: [o, ...d.orders] } : d));
     });
-    return () => socket.disconnect();
-  }, []);
+    return () => {
+      clearTimeout(pagesTimer.current);
+      socket.disconnect();
+    };
+  }, [loadPages]);
 
   async function sendReply(e) {
     e.preventDefault();
@@ -140,6 +193,17 @@ export default function Inbox() {
   const conv = detail?.conversation;
   const cartTotal = conv?.cart?.reduce((s, i) => s + i.price * i.quantity, 0) || 0;
   const q = search.trim().toLowerCase();
+  const pageNameOf = (pageId) => inboxPages.pages.find((p) => p.pageId === pageId)?.name || `Page ${pageId}`;
+  const sourceOf = (c) => (c.channel === 'messenger' && c.pageId ? pageNameOf(c.pageId) : CHANNEL_LABEL[c.channel]);
+  const channelLine = (c) => (c.channel === 'messenger' && c.pageId ? `Messenger · ${pageNameOf(c.pageId)}` : CHANNEL_LABEL[c.channel]);
+  const noPageAssigned = inboxPages.restricted && inboxPages.pages.length === 0 && !inboxPages.canSeeOther;
+  const emptyText = noPageAssigned
+    ? 'Bạn chưa được giao Page nào. Liên hệ quản trị viên để được phân Page.'
+    : page === 'none'
+      ? 'Không có hội thoại ngoài Fanpage.'
+      : page
+        ? 'Không có hội thoại nào của Page này.'
+        : 'Chưa có hội thoại.';
   const visible = q ? convs.filter((c) => `${customerName(c)} ${c.lastMessagePreview}`.toLowerCase().includes(q)) : convs;
 
   return (
@@ -151,6 +215,29 @@ export default function Inbox() {
             <Icon name="search" size={16} />
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Tìm kiếm" aria-label="Tìm hội thoại" />
           </label>
+          {(inboxPages.pages.length > 0 || page !== '') && (
+            <select className="inbox-page-select" aria-label="Lọc theo Fanpage" value={page} onChange={(e) => changePage(e.target.value)}>
+              <option value="">{inboxPages.restricted ? 'Tất cả Page được giao' : 'Tất cả Page và kênh'}</option>
+              {inboxPages.pages.map((p) => (
+                <option key={p.pageId} value={p.pageId}>
+                  {p.name || p.pageId}
+                  {!p.connected ? ' (đã ngắt kết nối)' : ''}
+                  {p.connected && p.status !== 'active' ? ' (cần kết nối lại)' : ''}
+                  {p.botEnabled === false ? ' (bot đang tắt)' : ''}
+                  {p.unread > 0 ? ` · ${p.unread} chưa đọc` : ''}
+                </option>
+              ))}
+              {page !== '' && page !== 'none' && !inboxPages.pages.some((p) => p.pageId === page) && (
+                <option value={page}>{page} (đã ngắt kết nối)</option>
+              )}
+              {inboxPages.canSeeOther && (
+                <option value="none">
+                  Ngoài Fanpage (Website, Instagram, WhatsApp)
+                  {inboxPages.otherUnread > 0 ? ` · ${inboxPages.otherUnread} chưa đọc` : ''}
+                </option>
+              )}
+            </select>
+          )}
           <div className="tabs">
             {FILTERS.map((f) => (
               <button key={f.key} className={filter === f.key ? 'active' : ''} onClick={() => setFilter(f.key)}>
@@ -159,7 +246,7 @@ export default function Inbox() {
             ))}
           </div>
         </div>
-        {visible.length === 0 && <p className="muted pad">Chưa có hội thoại.</p>}
+        {visible.length === 0 && <p className="muted pad">{emptyText}</p>}
         {visible.map((c) => {
           const unread = c.unreadCount > 0 && c._id !== selectedId;
           return (
@@ -172,8 +259,10 @@ export default function Inbox() {
                   <span> · {timeAgo(c.lastMessageAt)}</span>
                 </div>
                 <div className="conv-badges">
+                  <span className="badge badge-page" title={sourceOf(c)}>{sourceOf(c)}</span>
                   <span className={`badge stage-${c.stage}`}>{STAGE_LABEL[c.stage]}</span>
                   {c.mode === 'human' && <span className="badge badge-warn">Nhân viên</span>}
+                  {c.pageBotOff && <span className="badge">Bot Page tắt</span>}
                   {c.needsAttention && <span className="badge badge-danger">Cần chú ý</span>}
                 </div>
               </div>
@@ -197,7 +286,7 @@ export default function Inbox() {
               <Avatar name={customerName(conv)} size={40} channel={conv.channel} />
               <div className="thread-title">
                 <strong>{customerName(conv)}</strong>
-                <span className="muted">{CHANNEL_LABEL[conv.channel]} · {STAGE_LABEL[conv.stage]}</span>
+                <span className="muted">{channelLine(conv)} · {STAGE_LABEL[conv.stage]}</span>
                 {conv.handoffReason && <span className="handoff-reason">Lý do chuyển: {conv.handoffReason}</span>}
               </div>
               {canReply &&
@@ -231,7 +320,7 @@ export default function Inbox() {
           <div className="side-profile">
             <Avatar name={customerName(conv)} size={72} />
             <strong>{customerName(conv)}</strong>
-            <span className="muted">{CHANNEL_LABEL[conv.channel]}</span>
+            <span className="muted">{channelLine(conv)}</span>
           </div>
           <section className="side-card">
             <h4>Thông tin giao hàng</h4>
@@ -251,6 +340,9 @@ export default function Inbox() {
                   <li key={i.sku}><span>{i.name} ×{i.quantity}</span><strong>{formatVND(i.price * i.quantity)}</strong></li>
                 ))}
                 <li><span>Tạm tính</span><strong>{formatVND(cartTotal)}</strong></li>
+                {conv.staffDiscount && (
+                  <li><span>Ưu đãi NV{conv.staffDiscount.staffName ? ` (${conv.staffDiscount.staffName})` : ''}: {conv.staffDiscountView?.description}{conv.staffDiscountView && !conv.staffDiscountView.applied ? ' — chưa đủ điều kiện' : ''}</span><strong>-{formatVND(conv.staffDiscountView?.amount || 0)}</strong></li>
+                )}
               </ul>
             )}
           </section>

@@ -12,7 +12,14 @@ export function publicUser(user) {
     role: user.role,
     active: user.active,
     permissions: effectivePermissions(user),
+    ...scopeFields(user),
   };
+}
+
+// Phạm vi Hộp thư/Đơn hàng: admin luôn là "Tất cả"; bản ghi cũ thiếu trường thì mặc định không giới hạn
+function scopeFields(user) {
+  if (user.role === 'admin') return { inboxScope: 'all', pageIds: [], inboxOther: false };
+  return { inboxScope: user.inboxScope || 'all', pageIds: user.pageIds || [], inboxOther: user.inboxOther === true };
 }
 
 // Dùng cho trang Người dùng
@@ -24,6 +31,7 @@ export function userRow(user) {
     role: user.role,
     active: user.active,
     permissions: user.permissions,
+    ...scopeFields(user),
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };

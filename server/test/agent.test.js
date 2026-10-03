@@ -53,7 +53,7 @@ describe('Luồng tư vấn → chốt đơn', () => {
     assert.ok(result.products.some((p) => p.sku === 'NPK-16168' && p.price === 399000));
     // system prompt chứa catalog & giai đoạn
     assert.match(client.requests[0].messages[0].content, /Phân NPK/);
-    assert.equal(client.requests[0].tools.length, 9);
+    assert.equal(client.requests[0].tools.length, 10);
   });
 
   it('thêm vào giỏ, chặn vượt tồn kho', async () => {

@@ -3,9 +3,9 @@ import mongoose from 'mongoose';
 import { Product } from '../models/Product.js';
 import { Knowledge } from '../models/Knowledge.js';
 import { Order } from '../models/Order.js';
-import { cartTotals, describeCart } from '../services/cart.js';
+import { cartTotals, describeCart, describeStaffDiscount, staffDiscountAmount } from '../services/cart.js';
 import { pickBestPromotion } from '../services/promotionService.js';
-import { escapeRegex, isValidPhone, normalize, normalizePhone, tokenize } from '../utils/text.js';
+import { escapeRegex, isValidPhone, mentionedNumbers, normalize, normalizePhone, tokenize } from '../utils/text.js';
 
 // ---------- Định nghĩa tool cho OpenAI function calling ----------
 const fn = (name, description, properties = {}, required = []) => ({
@@ -50,6 +50,21 @@ export const toolDefinitions = [
   fn('create_order', 'Tạo đơn hàng từ giỏ hàng. Chỉ gọi khi khách đã XÁC NHẬN bản tóm tắt đơn.', {
     customer_confirmed: { type: 'boolean', description: 'true nếu khách đã xác nhận rõ ràng' },
   }, ['customer_confirmed']),
+  fn(
+    'apply_staff_discount',
+    'Áp hoặc bỏ ưu đãi riêng mà NHÂN VIÊN đã hứa với khách. Chỉ dùng tin trong mục "Chỉ dẫn của nhân viên"; số liệu phải đúng như trong tin.',
+    {
+      action: { type: 'string', enum: ['set', 'remove'] },
+      message_id: { type: 'string', description: 'Mã tin nhân viên trong mục Chỉ dẫn của nhân viên' },
+      kind: { type: 'string', enum: ['amount', 'percent', 'unit_price'], description: 'amount: giảm số tiền; percent: giảm %; unit_price: giá bán riêng mỗi sản phẩm' },
+      value: { type: 'number', description: 'Số tiền VND hoặc số % đúng như nhân viên viết' },
+      per_unit: { type: 'boolean', description: 'Chỉ với amount: true = giảm trên mỗi sản phẩm; không rõ thì false' },
+      product_id: { type: 'string', description: 'product_id hoặc sku nếu ưu đãi chỉ cho một sản phẩm (bắt buộc với unit_price)' },
+      min_quantity: { type: 'integer', minimum: 1, description: 'Số lượng tối thiểu nhân viên đặt ra, vd "mua 5 bao" = 5' },
+      note: { type: 'string', description: 'Tóm tắt ngắn ưu đãi' },
+    },
+    ['action'],
+  ),
   fn('lookup_order', 'Tra cứu trạng thái đơn hàng của khách.', {
     order_code: { type: 'string', description: 'Mã đơn, vd DH2610011A2B (tuỳ chọn)' },
     phone: { type: 'string', description: 'SĐT đặt hàng, dùng để xác minh khi tra mã đơn' },
@@ -170,11 +185,62 @@ const handlers = {
     }
     if (conversation.cart.length) setStage(conversation, 'cart');
     await conversation.save();
-    return { ok: true, cart: describeCart(conversation.cart, settings) };
+    return { ok: true, cart: describeCart(conversation.cart, settings, conversation.staffDiscount) };
   },
 
   async view_cart(_args, ctx) {
-    return describeCart(ctx.conversation.cart, ctx.settings);
+    return describeCart(ctx.conversation.cart, ctx.settings, ctx.conversation.staffDiscount);
+  },
+
+  async apply_staff_discount(args, ctx) {
+    const { conversation, settings } = ctx;
+    if (args.action === 'remove') {
+      const had = Boolean(conversation.staffDiscount);
+      conversation.staffDiscount = null;
+      await conversation.save();
+      if (had) ctx.events.push({ type: 'staff_discount', text: 'AI bỏ ưu đãi của nhân viên theo chỉ dẫn mới' });
+      return { ok: true, cart: describeCart(conversation.cart, settings, null) };
+    }
+    if (args.action !== 'set') return { error: 'action phải là set hoặc remove.' };
+
+    // Thẩm quyền chỉ đến từ tin nhân viên do server dựng, không tin message_id tuỳ ý
+    const msg = (ctx.staffInstructions ?? []).find((m) => m.id === String(args.message_id));
+    if (!msg) return { error: 'Chỉ được áp ưu đãi từ tin nhắn có trong mục Chỉ dẫn của nhân viên.' };
+    const { kind, value } = args;
+    if (!['amount', 'percent', 'unit_price'].includes(kind)) return { error: 'Mức ưu đãi không hợp lệ.' };
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return { error: 'Mức ưu đãi không hợp lệ.' };
+    if (kind === 'percent' ? value > 100 : !Number.isInteger(value)) return { error: 'Mức ưu đãi không hợp lệ.' };
+
+    // Con số AI đưa ra phải có trong chính tin nhân viên
+    const nums = mentionedNumbers(msg.text);
+    // Tin có điều kiện số lượng ("mua 5 bao") thì min_quantity bắt buộc và phải khớp
+    if (nums.qty.size > 0 && !nums.qty.has(args.min_quantity)) {
+      return { error: `Số lượng không khớp: tin nhân viên có điều kiện số lượng (${[...nums.qty].join(' hoặc ')}). Phải truyền min_quantity đúng con số đó (vd min_quantity=${[...nums.qty][0]}) rồi gọi lại.` };
+    }
+    const matched = (kind === 'percent' ? nums.percent.has(value) : nums.money.has(value)) && (!args.min_quantity || nums.plain.has(args.min_quantity));
+    if (!matched) return { error: 'Số liệu không khớp với tin nhắn của nhân viên. Không tự đặt mức ưu đãi; nếu không chắc, hãy chuyển nhân viên.' };
+
+    if (kind === 'unit_price' && !args.product_id) return { error: 'Giá riêng phải gắn với một sản phẩm (product_id).' };
+    let p = null;
+    if (args.product_id) {
+      p = await findProduct(args.product_id);
+      if (!p || !p.active) return { error: 'Không tìm thấy sản phẩm, hãy dùng search_products để lấy product_id đúng.' };
+    }
+
+    conversation.staffDiscount = {
+      messageId: msg.id,
+      staffName: msg.author,
+      kind,
+      value,
+      perUnit: kind === 'amount' && args.per_unit === true,
+      productId: p?._id ?? null,
+      productName: p?.name ?? '',
+      minQuantity: args.min_quantity || 0,
+      note: String(args.note ?? '').slice(0, 200),
+    };
+    await conversation.save();
+    ctx.events.push({ type: 'staff_discount', text: `AI áp ưu đãi theo chỉ dẫn của nhân viên ${msg.author || ''}: ${describeStaffDiscount(conversation.staffDiscount)}` });
+    return { ok: true, cart: describeCart(conversation.cart, settings, conversation.staffDiscount) };
   },
 
   async save_customer_info(args, ctx) {
@@ -223,19 +289,39 @@ const handlers = {
       item.listPrice = r.listPrice;
       item.promotion = r.promotion;
     }
+    // Ưu đãi nhân viên chỉ còn hiệu lực khi tin gốc vẫn nằm trong mục chỉ dẫn (chưa bị đơn mới hơn làm cũ)
+    if (conversation.staffDiscount && !(ctx.staffInstructions ?? []).some((m) => m.id === String(conversation.staffDiscount.messageId))) {
+      conversation.staffDiscount = null;
+      await conversation.save();
+      return {
+        error: 'Ưu đãi của nhân viên không còn hiệu lực. Báo khách tổng tiền mới, xin xác nhận lại rồi mới tạo đơn.',
+        cart: describeCart(conversation.cart, settings, null),
+      };
+    }
     if (priceChanged) {
       await conversation.save();
       return {
         error: 'Giá đã thay đổi do khuyến mãi thay đổi hoặc hết hạn. Báo khách giỏ hàng và tổng tiền mới, xin xác nhận lại rồi mới tạo đơn.',
-        cart: describeCart(conversation.cart, settings),
+        cart: describeCart(conversation.cart, settings, conversation.staffDiscount),
       };
+    }
+    const sd = conversation.staffDiscount;
+    if (sd) {
+      const check = staffDiscountAmount(conversation.cart, sd);
+      if (!check.applied) {
+        return {
+          error: `Ưu đãi của nhân viên chưa đủ điều kiện (${check.reason}). Báo khách, rồi điều chỉnh giỏ hoặc gọi apply_staff_discount action=remove trước khi tạo đơn.`,
+          cart: describeCart(conversation.cart, settings, sd),
+        };
+      }
     }
 
     // Chat thử: mô phỏng tạo đơn, không ghi DB, không trừ kho
     if (conversation.channel === 'test') {
-      const totals = cartTotals(conversation.cart, settings);
+      const totals = cartTotals(conversation.cart, settings, sd);
       const items = conversation.cart.map((i) => `${i.name} x${i.quantity}`);
       conversation.cart = [];
+      conversation.staffDiscount = null;
       setStage(conversation, 'ordered');
       await conversation.save();
       return {
@@ -244,6 +330,7 @@ const handlers = {
         order_code: `TEST${Date.now().toString(36).toUpperCase()}`,
         items,
         subtotal: totals.subtotal,
+        discount: totals.discount,
         shipping_fee: totals.shippingFee,
         total: totals.total,
         shipping: { name: c.name, phone: c.phone, address: c.address },
@@ -270,7 +357,7 @@ const handlers = {
       return { error: err.message };
     }
 
-    const { subtotal, shippingFee, total } = cartTotals(items, settings);
+    const { subtotal, discount, shippingFee, total } = cartTotals(items, settings, sd);
     let order;
     for (let attempt = 0; !order; attempt += 1) {
       try {
@@ -282,6 +369,8 @@ const handlers = {
           pageId: conversation.channel === 'messenger' ? conversation.pageId || '' : '',
           items,
           subtotal,
+          discount,
+          staffDiscount: sd ? { ...(sd.toObject?.() ?? sd) } : null,
           shippingFee,
           total,
           shipping: { name: c.name, phone: c.phone, address: c.address },
@@ -297,6 +386,7 @@ const handlers = {
     }
 
     conversation.cart = [];
+    conversation.staffDiscount = null;
     conversation.checkout.note = '';
     conversation.orders.push(order._id);
     setStage(conversation, 'ordered');
@@ -308,6 +398,7 @@ const handlers = {
       order_code: order.code,
       items: items.map((i) => `${i.name} x${i.quantity}`),
       subtotal,
+      discount,
       shipping_fee: shippingFee,
       total,
       shipping: order.shipping,

@@ -3,7 +3,7 @@ import { useOutletContext } from 'react-router-dom';
 import { api } from '../api.js';
 import Modal from '../components/Modal.jsx';
 
-const EMPTY = { username: '', displayName: '', password: '', role: 'staff', permissions: [], active: true };
+const EMPTY = { username: '', displayName: '', password: '', role: 'staff', permissions: [], active: true, inboxScope: 'all', pageIds: [], inboxOther: false };
 
 function toForm(u) {
   return { ...EMPTY, ...u, password: '' };
@@ -12,7 +12,7 @@ function toForm(u) {
 export default function Users() {
   const { me } = useOutletContext();
   const [users, setUsers] = useState([]);
-  const [catalog, setCatalog] = useState({ roles: [], permissions: [] });
+  const [catalog, setCatalog] = useState({ roles: [], permissions: [], pages: [] });
   const [editing, setEditing] = useState(null); // null | form object
   const [error, setError] = useState('');
 
@@ -39,6 +39,9 @@ export default function Users() {
         body.role = editing.role;
         body.permissions = editing.permissions;
         body.active = editing.active;
+        body.inboxScope = editing.inboxScope;
+        body.pageIds = editing.pageIds;
+        body.inboxOther = editing.inboxOther;
       }
       if (editing._id) await api(`/admin/users/${editing._id}`, { method: 'PUT', body });
       else await api('/admin/users', { method: 'POST', body });
@@ -58,6 +61,14 @@ export default function Users() {
   const togglePermission = (key, on) =>
     setEditing({ ...editing, permissions: on ? [...editing.permissions, key] : editing.permissions.filter((k) => k !== key) });
 
+  const togglePage = (pageId, on) =>
+    setEditing({ ...editing, pageIds: on ? [...editing.pageIds, pageId] : editing.pageIds.filter((id) => id !== pageId) });
+
+  // Page đã giao nhưng không còn trong danh sách kết nối vẫn hiện để bỏ tick được
+  const scopePages = [
+    ...catalog.pages,
+    ...(editing?.pageIds || []).filter((id) => !catalog.pages.some((p) => p.pageId === id)).map((id) => ({ pageId: id, name: '', gone: true })),
+  ];
   const groups = [...new Set(catalog.permissions.map((p) => p.group))];
   const editingSelf = editing?._id && isSelf(editing);
 
@@ -67,7 +78,7 @@ export default function Users() {
         <h1 className="page-title">Người dùng</h1>
         <button className="btn" onClick={() => { setError(''); setEditing({ ...EMPTY }); }}>+ Thêm người dùng</button>
       </div>
-      <p className="muted">Quản trị viên có toàn quyền. Nhân viên chỉ dùng được những chức năng được tick chọn.</p>
+      <p className="muted">Quản trị viên có toàn quyền. Nhân viên chỉ dùng được những chức năng được tick chọn. Có thể giới hạn nhân viên chỉ xem hội thoại và đơn hàng của một số Page. Ngắt kết nối Page sẽ tự bỏ Page đó khỏi nhân viên được giao.</p>
       {error && !editing && <p className="error">{error}</p>}
       <div className="card table-wrap">
         <table>
@@ -144,6 +155,46 @@ export default function Users() {
               ))
             ) : (
               <p className="muted span-2">Quản trị viên có toàn bộ quyền.</p>
+            )}
+            {editing.role === 'staff' && (
+              <div className="span-2">
+                <strong>Phạm vi Hộp thư và Đơn hàng</strong>
+                <select
+                  value={editing.inboxScope}
+                  onChange={(e) => setEditing({ ...editing, inboxScope: e.target.value })}
+                  disabled={editingSelf}
+                  aria-label="Phạm vi Hộp thư và Đơn hàng"
+                >
+                  <option value="all">Tất cả Page và kênh</option>
+                  <option value="pages">Chỉ Page được giao</option>
+                </select>
+                {editing.inboxScope === 'pages' && (
+                  <>
+                    {scopePages.length === 0 && <p className="muted">Chưa có Page nào được kết nối.</p>}
+                    {scopePages.map((p) => (
+                      <label key={p.pageId} className="check">
+                        <input
+                          type="checkbox"
+                          checked={editing.pageIds.includes(p.pageId)}
+                          onChange={(e) => togglePage(p.pageId, e.target.checked)}
+                          disabled={editingSelf}
+                        />
+                        {p.name || p.pageId}
+                        {p.gone && ' (đã ngắt kết nối)'}
+                      </label>
+                    ))}
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={editing.inboxOther}
+                        onChange={(e) => setEditing({ ...editing, inboxOther: e.target.checked })}
+                        disabled={editingSelf}
+                      />
+                      Xem cả hội thoại ngoài Fanpage (Website, Instagram, WhatsApp)
+                    </label>
+                  </>
+                )}
+              </div>
             )}
             <label className="check span-2">
               <input

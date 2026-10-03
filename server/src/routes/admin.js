@@ -12,12 +12,13 @@ import { Promotion } from '../models/Promotion.js';
 import { Settings } from '../models/Settings.js';
 import { User } from '../models/User.js';
 import { PERMISSIONS, PERMISSION_KEYS, ROLES } from '../permissions.js';
-import { emitAdmin } from '../realtime.js';
+import { emitAdmin, refreshUserSockets } from '../realtime.js';
 import { Customer } from '../models/Customer.js';
-import { conversationView, handleIncomingMessage, sendAgentMessage, setConversationMode } from '../services/conversationService.js';
+import { conversationView, handleIncomingMessage, sendAgentMessage, setConversationMode, withPageBotFlag } from '../services/conversationService.js';
 import { chunkDocument, importPriceList } from '../services/infoImport.js';
-import { connectPages, createOAuthState, disconnectPage, getOAuthSession, isOAuthConfigured, pageRow } from '../services/metaPageService.js';
-import { promotionRow, validatePromotionInput } from '../services/promotionService.js';
+import { botDisabledPageIds, connectPages, createOAuthState, disconnectPage, getOAuthSession, isOAuthConfigured, pageRow, setPageBotEnabled } from '../services/metaPageService.js';
+import { canSee, inboxScopeOf, scopeFilter } from '../services/inboxScope.js';
+import { promotionRow,validatePromotionInput } from '../services/promotionService.js';
 import { countOtherActiveAdmins, userRow } from '../services/userService.js';
 import { PASSWORD_MAX, PASSWORD_MIN, hashPassword, isValidPassword } from '../utils/password.js';
 import { escapeRegex } from '../utils/text.js';
@@ -29,6 +30,26 @@ const pick = (obj = {}, keys) => Object.fromEntries(keys.filter((k) => obj[k] !=
 const notFound = (res) => res.status(404).json({ error: 'Không tìm thấy' });
 const bad = (res, error, status = 400) => res.status(status).json({ error });
 const validId = (req, res, next) => (mongoose.isValidObjectId(req.params.id) ? next() : notFound(res));
+const PAGE_ID_RE = /^\d{1,32}$/;
+
+// Hội thoại ngoài phạm vi Page của người dùng: trả 404 như không tồn tại
+const conversationAccess = async (req, res, next) => {
+  const scope = inboxScopeOf(req.user);
+  if (!scope) return next();
+  const conv = await Conversation.findById(req.params.id).select('channel pageId').lean();
+  return conv && canSee(scope, conv) ? next() : notFound(res);
+};
+
+// Điều kiện "Ngoài Fanpage" (không tính Chat thử), dùng chung cho danh sách và đếm chưa đọc
+const OTHER_FILTER = { $or: [{ channel: { $nin: ['messenger', 'test'] } }, { channel: 'messenger', pageId: '' }] };
+
+// Bộ lọc Page của Hộp thư: {} (không lọc), một điều kiện Mongo, hoặc null khi giá trị không hợp lệ
+function inboxPageFilter(page) {
+  if (page === undefined || page === '') return {};
+  if (page === 'none') return OTHER_FILTER;
+  if (typeof page === 'string' && PAGE_ID_RE.test(page)) return { channel: 'messenger', pageId: page };
+  return null;
+}
 
 // ---------- Tổng quan ----------
 router.get('/stats', requirePermission('stats.view'), async (_req, res) => {
@@ -92,15 +113,48 @@ router.get('/stats', requirePermission('stats.view'), async (_req, res) => {
 
 // ---------- Hộp thư ----------
 router.get('/conversations', requirePermission('inbox.view'), async (req, res) => {
-  const filter = { channel: { $ne: 'test' } };
+  const pageFrag = inboxPageFilter(req.query.page);
+  if (pageFrag === null) return bad(res, 'Page không hợp lệ');
+  const filter = { $and: [{ channel: { $ne: 'test' } }, pageFrag, scopeFilter(inboxScopeOf(req.user))] };
   if (['bot', 'human'].includes(req.query.mode)) filter.mode = req.query.mode;
   if (STAGES.includes(req.query.stage)) filter.stage = req.query.stage;
   if (req.query.attention === '1') filter.needsAttention = true;
   const list = await Conversation.find(filter).sort({ lastMessageAt: -1 }).limit(200).populate('customer', 'name phone channel').lean();
-  res.json(list);
+  const offIds = await botDisabledPageIds();
+  res.json(list.map((c) => withPageBotFlag(c, offIds)));
 });
 
-router.get('/conversations/:id', requirePermission('inbox.view'), validId, async (req, res) => {
+// Danh sách Page cho bộ chọn của Hộp thư, kèm số hội thoại chưa đọc trong phạm vi người xem
+router.get('/inbox/pages', requirePermission('inbox.view'), async (req, res) => {
+  const scope = inboxScopeOf(req.user);
+  const pageMatch = scope ? { pageId: { $in: [...scope.pageIds] } } : { pageId: { $ne: '' } };
+  const [metaPages, counts] = await Promise.all([
+    MetaPage.find().select('pageId name status botEnabled').sort({ connectedAt: -1 }).lean(),
+    Conversation.aggregate([
+      { $match: { channel: 'messenger', ...pageMatch } },
+      { $group: { _id: '$pageId', unread: { $sum: { $cond: [{ $gt: ['$unreadCount', 0] }, 1, 0] } } } },
+    ]),
+  ]);
+  const unread = new Map(counts.map((c) => [c._id, c.unread]));
+  const row = ({ pageId, name, status, botEnabled }) => ({ pageId, name, status, botEnabled: botEnabled !== false, connected: true, unread: unread.get(pageId) || 0 });
+  const gone = (pageId) => ({ pageId, name: '', status: null, botEnabled: true, connected: false, unread: unread.get(pageId) || 0 });
+
+  let pages;
+  if (scope) {
+    // Giữ thứ tự gán; Page được giao mà không còn trong MetaPage thì báo đã ngắt kết nối
+    const byId = new Map(metaPages.map((p) => [p.pageId, p]));
+    pages = [...scope.pageIds].map((id) => (byId.has(id) ? row(byId.get(id)) : gone(id)));
+  } else {
+    const known = new Set(metaPages.map((p) => p.pageId));
+    const goneIds = [...unread.keys()].filter((id) => !known.has(id)).sort();
+    pages = [...metaPages.map(row), ...goneIds.map(gone)];
+  }
+  const canSeeOther = scope ? scope.other : true;
+  const otherUnread = canSeeOther ? await Conversation.countDocuments({ unreadCount: { $gt: 0 }, ...OTHER_FILTER }) : 0;
+  res.json({ restricted: Boolean(scope), canSeeOther, otherUnread, pages });
+});
+
+router.get('/conversations/:id', requirePermission('inbox.view'), validId, conversationAccess, async (req, res) => {
   const conversation = await conversationView(req.params.id);
   if (!conversation) return notFound(res);
   const messages = await Message.find({ conversation: conversation._id }).sort({ createdAt: -1 }).limit(300).lean();
@@ -108,21 +162,21 @@ router.get('/conversations/:id', requirePermission('inbox.view'), validId, async
   return res.json({ conversation, messages: messages.reverse(), orders });
 });
 
-router.post('/conversations/:id/messages', requirePermission('inbox.reply'), validId, async (req, res) => {
+router.post('/conversations/:id/messages', requirePermission('inbox.reply'), validId, conversationAccess, async (req, res) => {
   const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
   if (!text) return res.status(400).json({ error: 'Tin nhắn trống' });
   const message = await sendAgentMessage(req.params.id, text, req.user.username);
   return message ? res.json(message) : notFound(res);
 });
 
-router.post('/conversations/:id/mode', requirePermission('inbox.reply'), validId, async (req, res) => {
+router.post('/conversations/:id/mode', requirePermission('inbox.reply'), validId, conversationAccess, async (req, res) => {
   const { mode } = req.body || {};
   if (!['bot', 'human'].includes(mode)) return res.status(400).json({ error: 'mode phải là bot hoặc human' });
   const conv = await setConversationMode(req.params.id, mode, req.user.username);
   return conv ? res.json(conv) : notFound(res);
 });
 
-router.post('/conversations/:id/read', requirePermission('inbox.view'), validId, async (req, res) => {
+router.post('/conversations/:id/read', requirePermission('inbox.view'), validId, conversationAccess, async (req, res) => {
   await Conversation.updateOne({ _id: req.params.id }, { unreadCount: 0, needsAttention: false });
   res.json({ ok: true });
 });
@@ -131,15 +185,31 @@ router.post('/conversations/:id/read', requirePermission('inbox.view'), validId,
 // Chủ shop chat với AI như khách hàng. Kênh "test": không hiện trong hộp thư/thống kê, không tạo đơn thật.
 const validTestSession = (id) => typeof id === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(id);
 
+const PLAYGROUND_PAGE_GONE = 'Page không hợp lệ hoặc đã ngắt kết nối';
+const PLAYGROUND_PAGE_MISMATCH = 'Phiên chat thử đang gắn với Page khác, hãy làm mới đoạn chat';
+
+router.get('/playground/pages', requirePermission('playground.use'), async (_req, res) => {
+  const pages = await MetaPage.find().select('pageId name status botEnabled').sort({ connectedAt: -1 }).lean();
+  res.json({ pages: pages.map(({ pageId, name, status, botEnabled }) => ({ pageId, name, status, botEnabled: botEnabled !== false })) });
+});
+
 router.post('/playground/message', requirePermission('playground.use'), async (req, res) => {
   const { sessionId, text } = req.body || {};
   const clean = typeof text === 'string' ? text.trim() : '';
   if (!validTestSession(sessionId) || !clean || clean.length > 2000) return res.status(400).json({ error: 'Dữ liệu không hợp lệ' });
-  const { replies } = await handleIncomingMessage({ channel: 'test', externalId: sessionId, text: clean });
+  // Page giả lập: không chọn thì coi là '' (chỉ khuyến mãi chung)
+  const pageId = req.body.pageId ?? '';
+  if (pageId !== '') {
+    if (typeof pageId !== 'string' || !PAGE_ID_RE.test(pageId) || !(await MetaPage.exists({ pageId }))) return bad(res, PLAYGROUND_PAGE_GONE);
+  }
+  const existing = await Conversation.findOne({ channel: 'test', externalId: sessionId }).select('pageId').lean();
+  if (existing && (existing.pageId || '') !== pageId) return bad(res, PLAYGROUND_PAGE_MISMATCH, 409);
+  const { replies, pageBotOff } = await handleIncomingMessage({ channel: 'test', externalId: sessionId, text: clean, ...(pageId ? { pageId } : {}) });
   const conv = await Conversation.findOne({ channel: 'test', externalId: sessionId }).select('mode').lean();
   res.json({
     replies: replies.map(({ _id, role, text: t, createdAt, toolCalls }) => ({ _id, role, text: t, createdAt, toolCalls })),
     handedOff: conv?.mode === 'human',
+    pageBotOff: Boolean(pageBotOff),
   });
 });
 
@@ -162,12 +232,13 @@ router.get('/orders', requirePermission('orders.view'), async (req, res) => {
     const rx = new RegExp(escapeRegex(String(req.query.q).trim()), 'i');
     filter.$or = [{ code: rx }, { 'shipping.name': rx }, { 'shipping.phone': rx }];
   }
-  res.json(await Order.find(filter).sort({ createdAt: -1 }).limit(300).lean());
+  // $and để điều kiện phạm vi Page không đè lên $or của ô tìm kiếm
+  res.json(await Order.find({ $and: [filter, scopeFilter(inboxScopeOf(req.user))] }).sort({ createdAt: -1 }).limit(300).lean());
 });
 
 router.patch('/orders/:id', requirePermission('orders.update'), validId, async (req, res) => {
   const order = await Order.findById(req.params.id);
-  if (!order) return notFound(res);
+  if (!order || !canSee(inboxScopeOf(req.user), order)) return notFound(res);
   const { status, note } = req.body || {};
   if (status !== undefined && status !== order.status) {
     if (!ORDER_STATUSES.includes(status)) return res.status(400).json({ error: 'Trạng thái không hợp lệ' });
@@ -181,7 +252,7 @@ router.patch('/orders/:id', requirePermission('orders.update'), validId, async (
   }
   if (typeof note === 'string') order.note = note;
   await order.save();
-  emitAdmin('order:update', order.toObject());
+  emitAdmin('order:update', order.toObject(), order);
   return res.json(order);
 });
 
@@ -310,7 +381,6 @@ router.put('/settings', requirePermission('settings.manage'), async (req, res) =
 });
 
 // ---------- Kết nối Facebook Page ----------
-const PAGE_ID_RE = /^\d{1,32}$/;
 const SESSION_GONE = 'Phiên kết nối không tồn tại hoặc đã hết hạn';
 
 router.get('/meta/pages', requirePermission('channels.view'), async (_req, res) => {
@@ -349,7 +419,18 @@ router.post('/meta/pages', requirePermission('channels.manage'), async (req, res
 
 router.delete('/meta/pages/:pageId', requirePermission('channels.manage'), async (req, res) => {
   if (!PAGE_ID_RE.test(req.params.pageId)) return notFound(res);
-  return (await disconnectPage(req.params.pageId)) ? res.json({ ok: true }) : notFound(res);
+  if (!(await disconnectPage(req.params.pageId))) return notFound(res);
+  await unassignPage(req.params.pageId);
+  return res.json({ ok: true });
+});
+
+router.patch('/meta/pages/:pageId', requirePermission('channels.manage'), async (req, res) => {
+  if (!PAGE_ID_RE.test(req.params.pageId)) return notFound(res);
+  if (typeof req.body?.botEnabled !== 'boolean') return bad(res, 'Dữ liệu không hợp lệ');
+  const doc = await setPageBotEnabled(req.params.pageId, req.body.botEnabled);
+  if (!doc) return notFound(res);
+  emitAdmin('page:bot', { pageId: doc.pageId, botEnabled: doc.botEnabled });
+  return res.json(pageRow(doc));
 });
 
 // ---------- Khuyến mãi ----------
@@ -390,7 +471,7 @@ router.delete('/promotions/:id', requirePermission('promotions.manage'), validId
 });
 
 // ---------- Người dùng ----------
-const USER_FIELDS = ['displayName', 'role', 'permissions', 'active'];
+const USER_FIELDS = ['displayName', 'role', 'permissions', 'active', 'inboxScope', 'pageIds', 'inboxOther'];
 const USERNAME_RE = /^[a-z0-9._-]{3,32}$/;
 const ADMIN_ONLY = 'Chỉ quản trị viên mới thao tác được tài khoản quản trị';
 const SELF_LOCK = 'Không thể xoá, khoá hoặc đổi quyền tài khoản của chính bạn';
@@ -399,8 +480,46 @@ const LAST_ADMIN = 'Phải còn ít nhất một quản trị viên đang hoạt
 const validPermissions = (p) => Array.isArray(p) && p.every((k) => typeof k === 'string' && PERMISSION_KEYS.includes(k));
 const sameSet = (a, b) => a.length === b.length && a.every((k) => b.includes(k));
 
-router.get('/permissions', requirePermission('users.manage'), (_req, res) => {
-  res.json({ roles: ROLES, permissions: PERMISSIONS });
+// Kiểm tra phạm vi Hộp thư/Đơn hàng trong body; trả chuỗi lỗi hoặc null. Bỏ trùng pageIds ngay trên data.
+async function validateInboxScope(data, existing) {
+  if (data.inboxScope !== undefined && !['all', 'pages'].includes(data.inboxScope)) return 'Phạm vi Hộp thư không hợp lệ';
+  if (data.inboxOther !== undefined && typeof data.inboxOther !== 'boolean') return 'Dữ liệu không hợp lệ';
+  if (data.pageIds !== undefined) {
+    const bad = 'Page không hợp lệ';
+    const raw = data.pageIds;
+    if (!Array.isArray(raw) || raw.length > 100 || !raw.every((id) => typeof id === 'string' && PAGE_ID_RE.test(id))) return bad;
+    data.pageIds = [...new Set(raw)];
+    // Page đã giao từ trước thì không cần còn kết nối; Page mới phải tồn tại
+    const kept = new Set(existing?.pageIds ?? []);
+    const toCheck = data.pageIds.filter((id) => !kept.has(id));
+    if (toCheck.length && (await MetaPage.countDocuments({ pageId: { $in: toCheck } })) !== toCheck.length) return bad;
+  }
+  return null;
+}
+
+// Chuẩn hoá phạm vi theo vai trò/phạm vi cuối; sau hàm này data luôn có đủ ba trường
+function normalizeInboxScope(data, finalRole, existing) {
+  const scope = finalRole === 'admin' ? 'all' : (data.inboxScope ?? existing?.inboxScope ?? 'all');
+  data.inboxScope = scope;
+  if (scope === 'all') {
+    data.pageIds = [];
+    data.inboxOther = false;
+  } else {
+    data.pageIds = data.pageIds ?? existing?.pageIds ?? [];
+    data.inboxOther = data.inboxOther ?? existing?.inboxOther === true;
+  }
+}
+
+// Ngắt kết nối Page: bỏ Page khỏi mọi người dùng và làm mới socket đang mở
+async function unassignPage(pageId) {
+  const affected = await User.find({ pageIds: pageId }).select('_id').lean();
+  await User.updateMany({ pageIds: pageId }, { $pull: { pageIds: pageId } });
+  for (const { _id } of affected) refreshUserSockets(String(_id), await User.findById(_id).lean());
+}
+
+router.get('/permissions', requirePermission('users.manage'), async (_req, res) => {
+  const pages = await MetaPage.find().select('pageId name status').sort({ connectedAt: -1 }).lean();
+  res.json({ roles: ROLES, permissions: PERMISSIONS, pages: pages.map(({ pageId, name, status }) => ({ pageId, name, status })) });
 });
 
 router.get('/users', requirePermission('users.manage'), async (_req, res) => {
@@ -421,6 +540,9 @@ router.post('/users', requirePermission('users.manage'), async (req, res) => {
   if (req.user.role === 'staff' && data.role === 'admin') return bad(res, ADMIN_ONLY, 403);
   if (data.permissions !== undefined) data.permissions = [...new Set(data.permissions)];
   if (data.role === 'admin') data.permissions = [];
+  const scopeError = await validateInboxScope(data, null);
+  if (scopeError) return bad(res, scopeError);
+  normalizeInboxScope(data, data.role ?? 'staff', null);
   const user = await User.create({ ...data, username, passwordHash: await hashPassword(password) });
   res.status(201).json(userRow(user));
 });
@@ -440,10 +562,22 @@ router.put('/users/:id', requirePermission('users.manage'), validId, async (req,
   if (finalRole === 'admin') data.permissions = [];
   if (req.user.role === 'staff' && (data.role === 'admin' || user.role === 'admin')) return bad(res, ADMIN_ONLY, 403);
 
+  const scopeError = await validateInboxScope(data, user);
+  if (scopeError) return bad(res, scopeError);
+  normalizeInboxScope(data, finalRole, user);
+
   const finalActive = data.active === undefined ? user.active : Boolean(data.active);
   const finalPermissions = data.permissions ?? user.permissions;
   if (req.params.id === String(req.user._id)) {
-    if (finalRole !== user.role || finalActive !== user.active || !sameSet(finalPermissions, user.permissions)) {
+    const oldPageIds = user.pageIds ?? [];
+    if (
+      finalRole !== user.role ||
+      finalActive !== user.active ||
+      !sameSet(finalPermissions, user.permissions) ||
+      data.inboxScope !== (user.inboxScope ?? 'all') ||
+      data.inboxOther !== (user.inboxOther === true) ||
+      !sameSet(data.pageIds, oldPageIds)
+    ) {
       return bad(res, SELF_LOCK);
     }
   }
@@ -457,6 +591,7 @@ router.put('/users/:id', requirePermission('users.manage'), validId, async (req,
     user.tokenVersion += 1;
   }
   await user.save();
+  refreshUserSockets(String(user._id), user);
   return res.json(userRow(user));
 });
 
@@ -467,6 +602,7 @@ router.delete('/users/:id', requirePermission('users.manage'), validId, async (r
   if (req.params.id === String(req.user._id)) return bad(res, SELF_LOCK);
   if (user.role === 'admin' && user.active && (await countOtherActiveAdmins(user._id)) === 0) return bad(res, LAST_ADMIN);
   await user.deleteOne();
+  refreshUserSockets(req.params.id, null);
   return res.json({ ok: true });
 });
 

@@ -130,7 +130,23 @@ export function pageRow(page) {
     tasks: page.tasks,
     connectedBy: page.connectedBy,
     connectedAt: page.connectedAt,
+    botEnabled: page.botEnabled !== false,
   };
+}
+
+// Page có đang tắt bot không. pageId rỗng, Page không tồn tại hoặc bản ghi cũ chưa có trường thì coi là đang bật.
+export async function isPageBotDisabled(pageId) {
+  if (!pageId) return false;
+  return Boolean(await MetaPage.exists({ pageId, botEnabled: false }));
+}
+
+// Tập pageId đang tắt bot, dùng để gắn nhãn cho danh sách Hộp thư
+export async function botDisabledPageIds() {
+  return new Set((await MetaPage.find({ botEnabled: false }).select('pageId').lean()).map((p) => p.pageId));
+}
+
+export async function setPageBotEnabled(pageId, enabled) {
+  return MetaPage.findOneAndUpdate({ pageId }, { botEnabled: enabled }, { returnDocument: 'after' });
 }
 
 export async function connectPages(sessionId, userId, pageIds, username) {

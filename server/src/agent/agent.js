@@ -20,19 +20,21 @@ const supportsTemperature = (model) => !/^(o\d|gpt-5)/.test(model);
 /**
  * Vòng lặp agent: model -> (tool calls -> kết quả) lặp lại -> câu trả lời cuối.
  * @param {object} p
- * @param {Array<{role:'user'|'assistant', content:string}>} p.history lịch sử đã gồm tin nhắn mới nhất
+ * @param {Array<{role:'user'|'assistant', content:string}>} p.history lịch sử đã gồm tin nhắn mới nhất (tin nhân viên mang nhãn [Nhân viên trả lời])
+ * @param {Array<{id:string, author:string, text:string, at:Date}>} p.staffInstructions tin nhân viên còn hiệu lực (server dựng từ DB, có thẩm quyền)
  * @param {OpenAI} p.client cho phép inject client giả khi test
  */
-export async function runAgent({ conversation, customer, settings, history, client }) {
+export async function runAgent({ conversation, customer, settings, history, staffInstructions = [], client }) {
   const model = settings.model || config.openai.model;
   const categories = (await Product.distinct('category', { active: true })).filter(Boolean);
-  // pageId của Instagram là ID tài khoản IG, không phải Page: chỉ Messenger mới nhận KM riêng của Page
-  const promoPageId = conversation.channel === 'messenger' ? conversation.pageId : '';
+  // pageId của Instagram là ID tài khoản IG, không phải Page: chỉ Messenger mới nhận KM riêng của Page.
+  // Chat thử (test) mang pageId của Page đang giả lập (route /playground/message đã kiểm tra Page tồn tại).
+  const promoPageId = ['messenger', 'test'].includes(conversation.channel) ? conversation.pageId : '';
   const promotions = await activePromotionsFor(promoPageId, new Date());
-  const ctx = { conversation, customer, settings, promotions, events: [] };
+  const ctx = { conversation, customer, settings, promotions, staffInstructions, events: [] };
   const toolLog = [];
 
-  const messages = [{ role: 'system', content: buildSystemPrompt({ settings, conversation, customer, categories, promotions }) }, ...history];
+  const messages = [{ role: 'system', content: buildSystemPrompt({ settings, conversation, customer, categories, promotions, staffInstructions }) }, ...history];
 
   const call = (extra = {}) =>
     client.chat.completions.create({

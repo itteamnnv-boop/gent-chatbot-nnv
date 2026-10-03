@@ -20,6 +20,7 @@ export default function Channels() {
   const [picking, setPicking] = useState(null); // null | { sessionId, pages, selected }
   const [error, setError] = useState('');
   const [failed, setFailed] = useState([]);
+  const [busyPageId, setBusyPageId] = useState(null);
 
   const load = () => api('/admin/meta/pages').then(setData).catch((e) => setError(e.message));
   useEffect(() => {
@@ -64,9 +65,22 @@ export default function Channels() {
   }
 
   async function remove(p) {
-    if (!window.confirm(`Ngắt kết nối Page "${p.name}"? Bot sẽ không trả lời tin nhắn từ Page này nữa.`)) return;
+    if (!window.confirm(`Ngắt kết nối Page "${p.name}"? Bot sẽ không trả lời tin nhắn từ Page này nữa. Page này cũng sẽ bị bỏ khỏi các nhân viên đang được giao.`)) return;
     await api(`/admin/meta/pages/${p.pageId}`, { method: 'DELETE' }).catch((err) => setError(err.message));
     load();
+  }
+
+  async function toggleBot(p) {
+    setError('');
+    setBusyPageId(p.pageId);
+    try {
+      const row = await api(`/admin/meta/pages/${p.pageId}`, { method: 'PATCH', body: { botEnabled: !p.botEnabled } });
+      setData((d) => ({ ...d, pages: d.pages.map((x) => (x.pageId === p.pageId ? { ...x, botEnabled: row.botEnabled } : x)) }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusyPageId(null);
+    }
   }
 
   const toggle = (pageId, on) =>
@@ -85,7 +99,7 @@ export default function Channels() {
       <div className="card table-wrap">
         <table>
           <thead>
-            <tr><th>Tên Page</th><th>Page ID</th><th>Trạng thái</th><th>Khuyến mãi riêng</th><th>Người kết nối</th><th>Ngày kết nối</th><th /></tr>
+            <tr><th>Tên Page</th><th>Page ID</th><th>Trạng thái</th><th>Bot tự trả lời</th><th>Khuyến mãi riêng</th><th>Người kết nối</th><th>Ngày kết nối</th><th /></tr>
           </thead>
           <tbody>
             {data.pages.map((p) => (
@@ -96,17 +110,34 @@ export default function Channels() {
                   {p.status === 'active' ? <span className="badge badge-ok">Đang hoạt động</span> : <span className="badge" title={p.lastError}>Cần kết nối lại</span>}
                 </td>
                 <td>
+                  <div className="ai-toggle">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={p.botEnabled}
+                      aria-label={`Bật/tắt bot tự trả lời cho Page ${p.name}`}
+                      className={`switch${p.botEnabled ? ' on' : ''}`}
+                      onClick={() => toggleBot(p)}
+                      disabled={!canManage || busyPageId === p.pageId}
+                    >
+                      <span />
+                    </button>
+                    <span className="muted">{p.botEnabled ? 'Đang bật' : 'Đang tắt'}</span>
+                  </div>
+                </td>
+                <td>
                   {can(me, 'promotions.view') ? <Link to={`/admin/promotions?page=${p.pageId}`}>{p.promotionCount}</Link> : p.promotionCount}
                 </td>
                 <td>{p.connectedBy}</td>
                 <td>{formatTime(p.connectedAt)}</td>
                 <td className="actions">
+                  {can(me, 'inbox.view') && <Link className="btn-ghost" to={`/admin/inbox?page=${p.pageId}`}>Xem hội thoại</Link>}
                   {canManage && <button className="btn-ghost danger" onClick={() => remove(p)}>Ngắt kết nối</button>}
                 </td>
               </tr>
             ))}
             {data.pages.length === 0 && (
-              <tr><td colSpan={7} className="muted">Chưa có Page nào được kết nối.</td></tr>
+              <tr><td colSpan={8} className="muted">Chưa có Page nào được kết nối.</td></tr>
             )}
           </tbody>
         </table>

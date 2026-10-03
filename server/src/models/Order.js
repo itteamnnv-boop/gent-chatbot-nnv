@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { CHANNELS } from './Customer.js';
+import { staffDiscountSchema } from './Conversation.js';
 
 export const ORDER_STATUSES = ['new', 'confirmed', 'shipping', 'completed', 'cancelled'];
 
@@ -27,6 +28,9 @@ const orderSchema = new mongoose.Schema(
     pageId: { type: String, default: '' },
     items: [orderItemSchema],
     subtotal: Number,
+    discount: { type: Number, default: 0 },
+    // Bản chụp ưu đãi của nhân viên lúc tạo đơn (ghi vết ai cấp, từ tin nào)
+    staffDiscount: { type: staffDiscountSchema, default: null },
     shippingFee: Number,
     total: Number,
     shipping: {

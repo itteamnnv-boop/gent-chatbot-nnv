@@ -9,8 +9,7 @@ import mongoose from 'mongoose';
 import { Server } from 'socket.io';
 import { config } from './config.js';
 import { authenticateToken } from './middleware/auth.js';
-import { effectivePermissions } from './permissions.js';
-import { permissionRoom, setIO } from './realtime.js';
+import { attachAdminSocket, setIO } from './realtime.js';
 import adminRoutes from './routes/admin.js';
 import authRoutes from './routes/auth.js';
 import chatRoutes, { isValidSessionId } from './routes/chat.js';
@@ -61,7 +60,7 @@ export function createApp() {
     });
     authenticateToken(socket.handshake.auth?.token)
       .then((user) => {
-        if (user) socket.join(effectivePermissions(user).map(permissionRoom));
+        if (user) attachAdminSocket(socket, user);
       })
       .catch(() => {});
   });

@@ -8,6 +8,11 @@ const userSchema = new mongoose.Schema(
     passwordHash: { type: String, required: true, select: false },
     role: { type: String, enum: ROLES, default: 'staff' },
     permissions: { type: [String], enum: PERMISSION_KEYS, default: [] },
+    // Phạm vi Hộp thư/Đơn hàng của nhân viên: 'all' = mọi Page và kênh, 'pages' = chỉ Page được giao
+    inboxScope: { type: String, enum: ['all', 'pages'], default: 'all' },
+    pageIds: { type: [String], default: [] },
+    // Chỉ có nghĩa khi inboxScope = 'pages': được xem cả hội thoại ngoài Fanpage
+    inboxOther: { type: Boolean, default: false },
     active: { type: Boolean, default: true },
     // Tăng khi đổi mật khẩu để vô hiệu token cũ
     tokenVersion: { type: Number, default: 0 },
